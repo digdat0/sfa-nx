@@ -985,9 +985,11 @@ void snowCloudUpdateFlakes(u8* snow)
             m[5] = size;
             m[8] = 0.0f;
             e->angA =
-                timeDelta * (f32)e->angVelA + (f32)e->angA;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                (s32)(timeDelta * (f32)e->angVelA + (f32)e->angA);
             e->angB =
-                timeDelta * (f32)e->angVelB + (f32)e->angB;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                (s32)(timeDelta * (f32)e->angVelB + (f32)e->angB);
             angleToVec2((u16)(0xffff - cam->yaw), &c1, &s1);
             angleToVec2(e->angA, &c2, &s2);
             angleToVec2(e->angB, &c3, &s3);
@@ -1810,7 +1812,8 @@ void newclouds_run(void)
     gNewCloudSnowFlashAlpha = 0;
     if (nearestCloud != NULL && nearestCloud->cloudType == 4)
     {
-        gNewCloudSnowFlashAlpha = 255.0f * gNewCloudOvercastFadeLevel;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gNewCloudSnowFlashAlpha = (s32)(255.0f * gNewCloudOvercastFadeLevel);
         if (gNewCloudSnowFlashAlpha != 0)
         {
             rot = 3.142f *

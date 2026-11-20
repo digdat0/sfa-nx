@@ -498,6 +498,78 @@ static ByteBuffer BuildRGBA8FromCMPR(uint32_t width, uint32_t height, uint32_t m
   return buf;
 }
 
+// SFA-NX: rewrites GameCube CMPR data as standard BC1 (DXT1) for the GPU. The block contents are the same
+// format; the differences are layout and byte order:
+//   - CMPR stores 2x2 groups of 4x4 blocks per 8x8 tile; BC1 stores blocks in plain row order.
+//   - The two RGB565 colours are big-endian in CMPR, little-endian in BC1.
+//   - Each row's four 2-bit indices are in the opposite bit order.
+// Returns false (the caller decodes to RGBA8 instead) for sizes that are not a multiple of 4, short data,
+// or a block that uses transparency (c0 <= c1 with index 3): BC1's 3-colour mode decodes that block
+// differently from the GameCube, so only opaque textures are converted.
+bool convert_cmpr_to_bc1(uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data, ByteBuffer& out) {
+  if (width == 0 || height == 0 || width % 4 != 0 || height % 4 != 0) {
+    return false;
+  }
+  size_t need = 0;
+  size_t outSize = 0;
+  uint32_t w = width;
+  uint32_t h = height;
+  for (uint32_t mip = 0; mip < mips; ++mip) {
+    need += static_cast<size_t>((w + 7) / 8) * ((h + 7) / 8) * 32;
+    outSize += static_cast<size_t>((w + 3) / 4) * ((h + 3) / 4) * 8;
+    w = w > 1 ? w / 2 : 1;
+    h = h > 1 ? h / 2 : 1;
+  }
+  if (data.size() < need) {
+    return false;
+  }
+  ByteBuffer buf{outSize};
+  uint8_t* dst = buf.data();
+  const uint8_t* src = data.data();
+  w = width;
+  h = height;
+  for (uint32_t mip = 0; mip < mips; ++mip) {
+    const uint32_t bw = (w + 3) / 4;
+    const uint32_t bh = (h + 3) / 4;
+    const uint32_t tw = (w + 7) / 8;
+    const uint32_t th = (h + 7) / 8;
+    for (uint32_t ty = 0; ty < th; ++ty) {
+      for (uint32_t tx = 0; tx < tw; ++tx) {
+        for (uint32_t sub = 0; sub < 4; ++sub) {
+          const uint32_t bx = tx * 2 + (sub & 1);
+          const uint32_t by = ty * 2 + (sub >> 1);
+          if (bx >= bw || by >= bh) {
+            continue;
+          }
+          const uint8_t* s = src + ((static_cast<size_t>(ty) * tw + tx) * 4 + sub) * 8;
+          const uint16_t c0 = static_cast<uint16_t>((s[0] << 8) | s[1]);
+          const uint16_t c1 = static_cast<uint16_t>((s[2] << 8) | s[3]);
+          uint8_t* d = dst + (static_cast<size_t>(by) * bw + bx) * 8;
+          d[0] = s[1];
+          d[1] = s[0];
+          d[2] = s[3];
+          d[3] = s[2];
+          for (uint32_t row = 0; row < 4; ++row) {
+            const uint8_t bits = s[4 + row];
+            if (c0 <= c1 && ((bits & 0xC0) == 0xC0 || (bits & 0x30) == 0x30 || (bits & 0x0C) == 0x0C ||
+                             (bits & 0x03) == 0x03)) {
+              return false;
+            }
+            d[4 + row] = static_cast<uint8_t>(((bits >> 6) & 3) | (((bits >> 4) & 3) << 2) |
+                                              (((bits >> 2) & 3) << 4) | ((bits & 3) << 6));
+          }
+        }
+      }
+    }
+    src += static_cast<size_t>(tw) * th * 32;
+    dst += static_cast<size_t>(bw) * bh * 8;
+    w = w > 1 ? w / 2 : 1;
+    h = h > 1 ? h / 2 : 1;
+  }
+  out = std::move(buf);
+  return true;
+}
+
 static ByteBuffer BuildRGBA8FromBC1(uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data) {
   const size_t texelCount = ComputeMippedTexelCount(width, height, mips);
   ByteBuffer buf{sizeof(RGBA8) * texelCount};

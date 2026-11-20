@@ -700,6 +700,20 @@ void aurora_dvd_process_callbacks(void) {
   processPendingCallbacks();
 }
 
+// SFA-NX: a blocking read like DVDRead that only waits for its own request. DVDRead runs the pending game
+// DVD callbacks on the calling thread while it waits; the movie worker (dll_3e.c) must not run game code.
+s32 aurora_dvd_read_no_callbacks(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset) {
+  if (!DVDReadAsyncPrio(fileInfo, addr, length, offset, nullptr, 2)) {
+    return DVD_RESULT_FATAL_ERROR;
+  }
+  s_worker.wait(&fileInfo->cb);
+  const s32 state = atomic_load_acquire(fileInfo->cb.state);
+  if (state == DVD_STATE_END) {
+    return static_cast<s32>(atomic_load_relaxed(fileInfo->cb.transferredSize));
+  }
+  return state == DVD_STATE_CANCELED ? DVD_RESULT_CANCELED : DVD_RESULT_FATAL_ERROR;
+}
+
 bool aurora_dvd_open(const char* disc_path) {
   if (disc_path == nullptr) {
     return false;

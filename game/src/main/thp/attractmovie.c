@@ -116,6 +116,8 @@ int AttractMovie_CloseFile(void) {
 
     player = &gAttractMoviePlayer;
     if ((player->isOpen != 0) && (player->state == 0)) {
+        fhMovieDecodeWait();
+        // SFA-NX: (the wait above) a decode running on the movie worker must finish before the file closes.
         player->isOpen = 0;
         DVDClose(&player->fileInfo);
         return 1;

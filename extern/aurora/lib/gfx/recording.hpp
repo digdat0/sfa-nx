@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <string>
 
+namespace aurora {
+class ByteBuffer;
+}
+
 namespace aurora::gfx::detail {
 
 struct FramePacket;
@@ -71,11 +75,15 @@ Range push_verts(ArrayRef<T> data, size_t alignment) {
   return push_verts(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T), alignment);
 }
 Range push_indices(const uint8_t* data, size_t length, size_t alignment);
+// Reserves length bytes of this frame's index data (aligned) for the caller to write in place.
+// Returns {} and out = nullptr when not recording.
+Range map_indices(size_t length, size_t alignment, uint8_t*& out);
 template <typename T>
 Range push_indices(ArrayRef<T> data, size_t alignment) {
   return push_indices(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T), alignment);
 }
 Range push_uniform(const uint8_t* data, size_t length);
+ByteBuffer* begin_uniform_append();
 template <typename T>
 Range push_uniform(const T& data) {
   return push_uniform(reinterpret_cast<const uint8_t*>(&data), sizeof(T));

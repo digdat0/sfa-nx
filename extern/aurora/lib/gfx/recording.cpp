@@ -168,8 +168,12 @@ PassSnapshotEntry& acquire_pass_snapshot(uint32_t width, uint32_t height, bool w
                     entry.color.format != webgpu::g_graphicsConfig.surfaceConfiguration.format)) {
     const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
     const wgpu::TextureDescriptor desc{
+        // SFA-NX: RenderAttachment as well (here and for the normal snapshot below), so copies from compressed
+        // render targets into these textures can be done by a draw (switch/deko/backend_commands.cpp
+        // copy_by_draw), which needs a render target.
         .label = "Pass Snapshot Color",
-        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc,
+        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc |
+                 wgpu::TextureUsage::RenderAttachment,
         .dimension = wgpu::TextureDimension::e2D,
         .size = size,
         .format = format,
@@ -207,7 +211,8 @@ PassSnapshotEntry& acquire_pass_snapshot(uint32_t width, uint32_t height, bool w
   if (wantNormal && (!entry.normal.texture || entry.normal.size.width != width || entry.normal.size.height != height)) {
     const wgpu::TextureDescriptor desc{
         .label = "Pass Snapshot Normal",
-        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc,
+        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc |
+                 wgpu::TextureUsage::RenderAttachment,
         .dimension = wgpu::TextureDimension::e2D,
         .size = size,
         .format = webgpu::NormalBufferFormat,
@@ -654,6 +659,10 @@ void increment_merged_draw_count() noexcept {
     ++g_recorder.mergedDrawCallCount;
   }
 }
+
+// SFA-NX direct renderer (switch/deko/direct.h): encoding.cpp tells GX and clear draws apart by encoder.
+DrawEncoder gx_draw_encoder() noexcept { return encode_draw<gx::render, gx::DrawData>; }
+DrawEncoder clear_draw_encoder() noexcept { return encode_draw<clear::render, clear::DrawData>; }
 
 } // namespace detail
 
@@ -1190,12 +1199,47 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) {
   return push(current_frame_packet().indices, data, length, alignment);
 }
 
+Range map_indices(size_t length, size_t alignment, uint8_t*& out) {
+  out = nullptr;
+  if (!check_recording("map_indices")) {
+    return {};
+  }
+  auto& target = current_frame_packet().indices;
+  if (alignment != 0) {
+    const size_t begin = target.size();
+    const size_t alignedBegin = AURORA_ALIGN(begin, alignment);
+    if (alignedBegin > begin) {
+      target.append_zeroes(alignedBegin - begin);
+    }
+  }
+  const auto begin = target.size();
+  if (length > 0) {
+    out = target.append_uninit(length);
+  }
+  return {static_cast<uint32_t>(begin), static_cast<uint32_t>(length)};
+}
+
 Range push_uniform(const uint8_t* data, size_t length) {
   ZoneScoped;
   if (!check_recording("push_uniform")) {
     return {};
   }
   return push(current_frame_packet().uniforms, data, length, resources().limits.minUniformBufferOffsetAlignment);
+}
+
+// SFA-NX: aligns this frame's uniform buffer for a new block and returns it, so the caller writes its
+// uniforms straight into it (no temporary copy). Null when not recording.
+ByteBuffer* begin_uniform_append() {
+  if (!check_recording("begin_uniform_append")) {
+    return nullptr;
+  }
+  auto& target = current_frame_packet().uniforms;
+  const size_t begin = target.size();
+  const size_t alignedBegin = AURORA_ALIGN(begin, resources().limits.minUniformBufferOffsetAlignment);
+  if (alignedBegin > begin) {
+    target.append_zeroes(alignedBegin - begin);
+  }
+  return &target;
 }
 
 Range push_storage(const uint8_t* data, size_t length) {

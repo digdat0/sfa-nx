@@ -297,7 +297,8 @@ void trickyUpdateColorVariant(GameObject* obj, TrickyState* state) {
             Obj_GetActiveModel(obj)->textureRefs->swapSelector = colorVariant;
             alpha = state->colorFadeTimer / 10.0f;
         }
-        Obj_SetModelColorOverrideRecursive(obj, 255, 255, 255, 196.0f * alpha, 1);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        Obj_SetModelColorOverrideRecursive(obj, 255, 255, 255, (s32)(196.0f * alpha), 1);
     } else {
         state->colorVariant = colorVariant;
         Obj_SetModelColorOverrideRecursive(obj, 0, 0, 0, 0, 0);

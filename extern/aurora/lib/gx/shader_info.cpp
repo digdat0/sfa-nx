@@ -214,15 +214,9 @@ u32 line_texcoord_mask() noexcept {
 ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
   ZoneScoped;
 
-  ShaderInfo info{
-      // render/logical viewport size, proj
-      .uniformSize = 8 + 8 + 64 + 16,
-  };
-
-  if (config.lineMode != 0) {
-    info.uniformSize += 4 + 4 + 4 + 4; // line_width, line_aspect_y, line_tex_offset, line_texcoord_mask
-    info.lineMode = config.lineMode;
-  }
+  // Fragment part only; the vertex part (vtxUniformSize) is added at the end.
+  ShaderInfo info{};
+  info.lineMode = config.lineMode;
 
   for (int attr = 0; attr < config.attrs.size(); attr++) {
     const auto attrType = config.attrs[attr].attrType;
@@ -232,9 +226,6 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
       info.indexAttr.set(attr);
     }
   }
-
-  // 10 position matrices, 10 texture matrices, 10 normal matrices.
-  info.uniformSize += sizeof(Mat3x4<float>) * 30;
 
   std::bitset<MaxTevRegs> writtenColor;
   std::bitset<MaxTevRegs> writtenAlpha;
@@ -310,52 +301,55 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     }
   }
 
-  info.uniformSize += info.loadsTevReg.count() * sizeof(Vec4<float>);
-  for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
-    if (info.sampledColorChannels.test(i)) {
-      const auto& cc = config.colorChannels[i];
-      const auto& cca = config.colorChannels[i + GX_ALPHA0];
-      if (cc.lightingEnabled || cca.lightingEnabled) {
-        info.lightingEnabled = true;
-      }
+  // Vertex part: every channel and every active texgen, whatever the fragment stage samples, so the
+  // vertex shader does not depend on the TEV setup. Lights are included when any channel lights or a
+  // texgen embosses.
+  info.lightingEnabled = false;
+  for (u32 k = 0; k < MaxColorChannels; ++k) {
+    const auto& cc = config.colorChannels[k];
+    u32 flags = cc.lightingEnabled ? 1u : 0u;
+    flags |= cc.matSrc == GX_SRC_VTX ? 2u : 0u;
+    flags |= cc.ambSrc == GX_SRC_VTX ? 4u : 0u;
+    flags |= static_cast<u32>(cc.diffFn) << 4;
+    flags |= static_cast<u32>(cc.attnFn) << 8;
+    info.chanFlags[k] = flags;
+    info.lightingEnabled = info.lightingEnabled || cc.lightingEnabled;
+    if (cc.lightingEnabled) {
+      info.litPairs |= 1u << (k & 1);
     }
   }
-  if (info.lightingEnabled) {
-    // Lights + light state for all channels
-    info.uniformSize += 16 + sizeof(Light) * GX::MaxLights;
-  }
-  for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
-    if (info.sampledColorChannels.test(i)) {
-      const auto& cc = config.colorChannels[i];
-      if (cc.lightingEnabled && cc.ambSrc == GX_SRC_REG) {
-        info.uniformSize += sizeof(Vec4<float>);
-      }
-      if (cc.matSrc == GX_SRC_REG) {
-        info.uniformSize += sizeof(Vec4<float>);
-      }
-      const auto& cca = config.colorChannels[i + GX_ALPHA0];
-      if (cca.lightingEnabled && cca.ambSrc == GX_SRC_REG) {
-        info.uniformSize += sizeof(Vec4<float>);
-      }
-      if (cca.matSrc == GX_SRC_REG) {
-        info.uniformSize += sizeof(Vec4<float>);
-      }
-    }
-  }
-  info.uniformSize += info.konstStages.count() * sizeof(Vec4<float>);
-  for (int i = 0; i < info.sampledTexCoords.size(); ++i) {
-    if (!info.sampledTexCoords.test(i)) {
+  for (u32 i = 0; i < MaxTexCoord; ++i) {
+    const auto& tcg = config.tcgs[i];
+    // tgParams, four words per texgen: source attribute (TgSrcNone = unused), kind (| 0x100 to normalize),
+    // matrix index (0xffff = identity; bump: the light index) and post-transform matrix (0xffff = identity).
+    u32* p = &info.tgParams[i * 4];
+    p[0] = TgSrcNone;
+    p[1] = TgKindMtx3x4;
+    p[2] = 0xffffu;
+    p[3] = 0xffffu;
+    if (tcg.src == GX_MAX_TEXGENSRC) {
       continue;
     }
-    const auto& tcg = config.tcgs[i];
-    if (tcg.postMtx != GX_PTIDENTITY) {
-      u32 postMtxIdx = (tcg.postMtx - GX_PTTEXMTX0) / 3;
-      info.usesPTTexMtx.set(postMtxIdx);
+    info.tgCount = i + 1;
+    if (tcg.type >= GX_TG_BUMP0 && tcg.type <= GX_TG_BUMP7) {
+      p[0] = tcg.embossSrc;
+      p[1] = TgKindBump;
+      p[2] = tcg.type - GX_TG_BUMP0;
+      info.lightingEnabled = true;
+      continue;
     }
+    p[0] = tcg.src;
+    p[1] = tcg.type == GX_TG_MTX2x4 ? TgKindMtx2x4 : tcg.type == GX_TG_SRTG ? TgKindSrtg : TgKindMtx3x4;
+    if (tcg.normalize) {
+      p[1] |= 0x100u;
+    }
+    p[2] = tcg.mtx == GX_IDENTITY ? 0xffffu : static_cast<u32>(tcg.mtx) / 3;
+    p[3] = tcg.postMtx == GX_PTIDENTITY ? 0xffffu : (tcg.postMtx - GX_PTTEXMTX0) / 3;
   }
-  if (info.usesPTTexMtx.any()) {
-    info.uniformSize += sizeof(Mat3x4<float>) * MaxPTTexMtx;
-  }
+  info.vtxUniformSize = VtxUniformBaseSize + (info.lightingEnabled ? sizeof(Light) * GX::MaxLights : 0);
+
+  info.uniformSize += info.loadsTevReg.count() * sizeof(Vec4<float>);
+  info.uniformSize += info.konstStages.count() * sizeof(Vec4<float>);
   if (config.fogType != GX_FOG_NONE) {
     info.usesFog = true;
     info.uniformSize += sizeof(Fog);
@@ -365,7 +359,7 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     info.uniformSize += MaxIndTexMtxs * sizeof(Mat2x4<float>);
   }
   info.uniformSize += info.sampledTextures.count() * sizeof(Vec4<float>);
-  info.uniformSize = gfx::align_uniform(info.uniformSize);
+  info.uniformSize = gfx::align_uniform(info.vtxUniformSize + info.uniformSize);
   if (info.uniformSize > MaxUniformSize) {
     Log.fatal("Uniform size exceeds maximum: {} > {}", info.uniformSize, MaxUniformSize);
   }
@@ -379,7 +373,10 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
   buf.append<f32>(g_gxState.renderViewport.height);
   buf.append<f32>(g_gxState.logicalViewport.width);
   buf.append<f32>(g_gxState.logicalViewport.height);
-  if (info.lineMode != 0) {
+  // The line/point parameters always take their 16 bytes, so the vertex part has a fixed layout.
+  if (info.lineMode == 0) {
+    buf.append_zeroes(16);
+  } else {
     if (info.lineMode == 3) { // GX_POINTS
       buf.append<f32>(static_cast<f32>(g_gxState.pointSize) / 6.f);
       buf.append<f32>(1.0f);
@@ -418,49 +415,43 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     buf.append(g_gxState.pnMtx[i].nrm);
   }
 
+  // Generic vertex shader setup (shader.cpp): channel flags, light masks, texgens, channel colors.
+  buf.append(info.chanFlags);
+  for (int i = 0; i < MaxColorChannels; ++i) {
+    buf.append<u32>(static_cast<u32>(g_gxState.colorChannelState[i].lightMask.to_ulong()));
+  }
+  buf.append<u32>(info.tgCount);
+  buf.append_zeroes(12);
+  buf.append(info.tgParams);
+  static const Mat3x4<float> identity{
+      {1.f, 0.f, 0.f, 0.f},
+      {0.f, 1.f, 0.f, 0.f},
+      {0.f, 0.f, 1.f, 0.f},
+  };
+  for (u32 i = 0; i < MaxTexCoord; ++i) {
+    const u32 post = info.tgParams[i * 4 + 3];
+    buf.append(post != 0xffffu ? g_gxState.ptTexMtxs[post] : identity);
+  }
+  for (int i = 0; i < MaxColorChannels; ++i) {
+    buf.append(g_gxState.colorChannelState[i].ambColor);
+  }
+  for (int i = 0; i < MaxColorChannels; ++i) {
+    buf.append(g_gxState.colorChannelState[i].matColor);
+  }
+  if (info.lightingEnabled) {
+    static_assert(sizeof(g_gxState.lights) == 80 * GX::MaxLights);
+    buf.append(g_gxState.lights);
+  }
+
+  // Fragment part.
   for (int i = 0; i < info.loadsTevReg.size(); ++i) {
     if (info.loadsTevReg.test(i)) {
       buf.append(g_gxState.colorRegs[i]);
     }
   }
-  if (info.lightingEnabled) {
-    // Lights
-    static_assert(sizeof(g_gxState.lights) == 80 * GX::MaxLights);
-    buf.append(g_gxState.lights);
-    // Light state for all channels
-    for (int i = 0; i < 4; ++i) {
-      buf.append<u32>(g_gxState.colorChannelState[i].lightMask.to_ulong());
-    }
-  }
-  for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
-    if (!info.sampledColorChannels.test(i)) {
-      continue;
-    }
-    const auto& ccc = g_gxState.colorChannelConfig[i];
-    const auto& ccs = g_gxState.colorChannelState[i];
-    if (ccc.lightingEnabled && ccc.ambSrc == GX_SRC_REG) {
-      buf.append(ccs.ambColor);
-    }
-    if (ccc.matSrc == GX_SRC_REG) {
-      buf.append(ccs.matColor);
-    }
-    const auto& ccca = g_gxState.colorChannelConfig[i + GX_ALPHA0];
-    const auto& ccsa = g_gxState.colorChannelState[i + GX_ALPHA0];
-    if (ccca.lightingEnabled && ccca.ambSrc == GX_SRC_REG) {
-      buf.append(ccsa.ambColor);
-    }
-    if (ccca.matSrc == GX_SRC_REG) {
-      buf.append(ccsa.matColor);
-    }
-  }
   for (int i = 0; i < info.konstStages.size(); ++i) {
     if (info.konstStages.test(i)) {
       buf.append(resolve_konst(g_gxState.tevKColorSels[i], g_gxState.tevKAlphaSels[i]));
-    }
-  }
-  if (info.usesPTTexMtx.any()) {
-    for (int i = 0; i < info.usesPTTexMtx.size(); ++i) {
-      buf.append(g_gxState.ptTexMtxs[i]);
     }
   }
   if (info.usesFog) {
@@ -503,9 +494,14 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
 
 gfx::Range build_uniform(const ShaderInfo& info) noexcept {
   ZoneScoped;
-  static ByteBuffer buf;
-  buf.clear();
-  fill_uniform(buf, info);
-  return gfx::push_uniform(buf.data(), buf.size());
+  // SFA-NX: written straight into the frame's uniform buffer (gfx::begin_uniform_append) instead of a scratch
+  // buffer that was then copied.
+  auto* target = gfx::begin_uniform_append();
+  if (target == nullptr) {
+    return {};
+  }
+  const size_t begin = target->size();
+  fill_uniform(*target, info);
+  return {static_cast<uint32_t>(begin), static_cast<uint32_t>(target->size() - begin)};
 }
 } // namespace aurora::gx

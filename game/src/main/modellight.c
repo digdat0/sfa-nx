@@ -318,40 +318,50 @@ void modelLightStruct_updateColorFade(ModelLightStruct* light)
     }
 
     light->diffuseColor[0] =
-        (light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[0] - light->diffuseFadeStartColor[0]) +
-         light->diffuseFadeStartColor[0]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[0] - light->diffuseFadeStartColor[0]) +
+         light->diffuseFadeStartColor[0]));
     light->diffuseColor[1] =
-        (light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[1] - light->diffuseFadeStartColor[1]) +
-         light->diffuseFadeStartColor[1]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[1] - light->diffuseFadeStartColor[1]) +
+         light->diffuseFadeStartColor[1]));
     light->diffuseColor[2] =
-        (light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[2] - light->diffuseFadeStartColor[2]) +
-         light->diffuseFadeStartColor[2]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[2] - light->diffuseFadeStartColor[2]) +
+         light->diffuseFadeStartColor[2]));
     light->diffuseColor[3] =
-        (light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[3] - light->diffuseFadeStartColor[3]) +
-         light->diffuseFadeStartColor[3]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->diffuseFadeTargetColor[3] - light->diffuseFadeStartColor[3]) +
+         light->diffuseFadeStartColor[3]));
 
-    light->diffuseColor[0] = ((f32)light->diffuseColor[0] * light->activeIntensity);
-    light->diffuseColor[1] = ((f32)light->diffuseColor[1] * light->activeIntensity);
-    light->diffuseColor[2] = ((f32)light->diffuseColor[2] * light->activeIntensity);
-    light->diffuseColor[3] = ((f32)light->diffuseColor[3] * light->activeIntensity);
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    light->diffuseColor[0] = (s32)(((f32)light->diffuseColor[0] * light->activeIntensity));
+    light->diffuseColor[1] = (s32)(((f32)light->diffuseColor[1] * light->activeIntensity));
+    light->diffuseColor[2] = (s32)(((f32)light->diffuseColor[2] * light->activeIntensity));
+    light->diffuseColor[3] = (s32)(((f32)light->diffuseColor[3] * light->activeIntensity));
 
     light->specularColor[0] =
-        (light->colorFadeProgress * (f32)(light->specularFadeTargetColor[0] - light->specularFadeStartColor[0]) +
-         light->specularFadeStartColor[0]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->specularFadeTargetColor[0] - light->specularFadeStartColor[0]) +
+         light->specularFadeStartColor[0]));
     light->specularColor[1] =
-        (light->colorFadeProgress * (f32)(light->specularFadeTargetColor[1] - light->specularFadeStartColor[1]) +
-         light->specularFadeStartColor[1]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->specularFadeTargetColor[1] - light->specularFadeStartColor[1]) +
+         light->specularFadeStartColor[1]));
     light->specularColor[2] =
-        (light->colorFadeProgress * (f32)(light->specularFadeTargetColor[2] - light->specularFadeStartColor[2]) +
-         light->specularFadeStartColor[2]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->specularFadeTargetColor[2] - light->specularFadeStartColor[2]) +
+         light->specularFadeStartColor[2]));
     light->specularColor[3] =
-        (light->colorFadeProgress * (f32)(light->specularFadeTargetColor[3] - light->specularFadeStartColor[3]) +
-         light->specularFadeStartColor[3]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)((light->colorFadeProgress * (f32)(light->specularFadeTargetColor[3] - light->specularFadeStartColor[3]) +
+         light->specularFadeStartColor[3]));
 
-    light->specularColor[0] = ((f32)light->specularColor[0] * light->activeIntensity);
-    light->specularColor[1] = ((f32)light->specularColor[1] * light->activeIntensity);
-    light->specularColor[2] = ((f32)light->specularColor[2] * light->activeIntensity);
-    light->specularColor[3] = ((f32)light->specularColor[3] * light->activeIntensity);
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    light->specularColor[0] = (s32)(((f32)light->specularColor[0] * light->activeIntensity));
+    light->specularColor[1] = (s32)(((f32)light->specularColor[1] * light->activeIntensity));
+    light->specularColor[2] = (s32)(((f32)light->specularColor[2] * light->activeIntensity));
+    light->specularColor[3] = (s32)(((f32)light->specularColor[3] * light->activeIntensity));
 }
 
 void modelLightStruct_startColorFade(ModelLightStruct* light, int mode, s16 frames)
@@ -975,10 +985,11 @@ static void modelLightStruct_loadDiffuseGXLight(ModelLightStruct* light, GameObj
         {
             GXColor color;
             f32 amt;
-            color.r = light->diffuseColor[0] * (amt = light->lightAmount);
-            color.g = light->diffuseColor[1] * amt;
-            color.b = light->diffuseColor[2] * amt;
-            color.a = light->diffuseColor[3] * amt;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            color.r = (s32)(light->diffuseColor[0] * (amt = light->lightAmount));
+            color.g = (s32)(light->diffuseColor[1] * amt);
+            color.b = (s32)(light->diffuseColor[2] * amt);
+            color.a = (s32)(light->diffuseColor[3] * amt);
             GXInitLightColor(&light->diffuseLightObj, color);
             GXInitLightAttnK(&light->diffuseLightObj, 1.0f, 0.0f, 0.0f);
         }
@@ -1442,14 +1453,15 @@ void updateLights(void)
             }
             else
             {
-                light->diffuseColor[0] = (f32)light->diffuseFadeStartColor[0] * light->activeIntensity;
-                light->diffuseColor[1] = (f32)light->diffuseFadeStartColor[1] * light->activeIntensity;
-                light->diffuseColor[2] = (f32)light->diffuseFadeStartColor[2] * light->activeIntensity;
-                light->diffuseColor[3] = (f32)light->diffuseFadeStartColor[3] * light->activeIntensity;
-                light->specularColor[0] = (f32)light->specularFadeStartColor[0] * light->activeIntensity;
-                light->specularColor[1] = (f32)light->specularFadeStartColor[1] * light->activeIntensity;
-                light->specularColor[2] = (f32)light->specularFadeStartColor[2] * light->activeIntensity;
-                light->specularColor[3] = (f32)light->specularFadeStartColor[3] * light->activeIntensity;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                light->diffuseColor[0] = (s32)((f32)light->diffuseFadeStartColor[0] * light->activeIntensity);
+                light->diffuseColor[1] = (s32)((f32)light->diffuseFadeStartColor[1] * light->activeIntensity);
+                light->diffuseColor[2] = (s32)((f32)light->diffuseFadeStartColor[2] * light->activeIntensity);
+                light->diffuseColor[3] = (s32)((f32)light->diffuseFadeStartColor[3] * light->activeIntensity);
+                light->specularColor[0] = (s32)((f32)light->specularFadeStartColor[0] * light->activeIntensity);
+                light->specularColor[1] = (s32)((f32)light->specularFadeStartColor[1] * light->activeIntensity);
+                light->specularColor[2] = (s32)((f32)light->specularFadeStartColor[2] * light->activeIntensity);
+                light->specularColor[3] = (s32)((f32)light->specularFadeStartColor[3] * light->activeIntensity);
             }
 
             if (light->lightKind == MODEL_LIGHT_KIND_PROJECTED)

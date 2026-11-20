@@ -42,5 +42,7 @@ PipelineRef find_pipeline(const clear::PipelineConfig& config, const RenderTarge
 PipelineRef find_pipeline(const rmlui::PipelineConfig& config);
 
 bool get_pipeline(PipelineRef ref, CompiledPipeline& pipeline);
+// SFA-NX: the handles without references (the cache keeps them alive; no wgpu AddRef/Release per draw).
+bool get_pipeline_raw(PipelineRef ref, WGPURenderPipeline& main, WGPURenderPipeline& prepass);
 
 } // namespace aurora::gfx

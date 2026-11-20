@@ -349,9 +349,11 @@ void set_render_scissor(const gfx::ClipRect& scissor) noexcept {
 
 const gfx::TextureBind& get_texture(GXTexMapID id) noexcept { return g_gxState.textures[static_cast<size_t>(id)]; }
 
+// SFA-NX: takes separate vertex and fragment modules (the generic vertex shader is shared by many fragment
+// shaders, shader.cpp).
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
-                                    wgpu::ShaderModule shader, const char* label) noexcept {
+                                    const GXShaderModules& shader, const char* label) noexcept {
   ZoneScoped;
   const float depthBias = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetBits);
   const float depthBiasSlopeScale = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetScaleBits);
@@ -379,7 +381,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
   colorTargets[gfx::SceneColorAttachmentIndex].blend = &blendState;
   colorTargets[gfx::SceneColorAttachmentIndex].writeMask = to_write_mask(options.colorUpdate, options.alphaUpdate);
   const wgpu::FragmentState fragmentState{
-      .module = shader,
+      .module = shader.fragment,
       .entryPoint = "fs_main",
       .targetCount = layout.colorAttachmentCount,
       .targets = colorTargets.data(),
@@ -389,7 +391,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
       .layout = sPipelineLayout,
       .vertex =
           {
-              .module = shader,
+              .module = shader.vertex,
               .entryPoint = "vs_main",
               .bufferCount = static_cast<uint32_t>(vtxBuffers.size()),
               .buffers = vtxBuffers.data(),

@@ -144,7 +144,8 @@ static int sc_totemstrength_finishRound(GameObject* obj, ScTotemStrengthState* s
     sc_totemstrength_setLevelControlState(obj, SC_LEVEL_CONTROL_ANIM_STATE_STOP_TREX_CHALLENGE);
     if (resultFlag == SC_TOTEM_STRENGTH_FLAG_WON) {
         sc_totembond_insertOrderedGameBit(sTotemStrengthRecordGameBits,
-                                          (u16)(gameTimerGetElapsedMilliseconds() / 10.0f));
+                                          // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                                          (u16)(s32)(gameTimerGetElapsedMilliseconds() / 10.0f));
     }
     setHudForceShowMask(0);
     if (state->sequenceIndex > 0) {

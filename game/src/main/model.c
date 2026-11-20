@@ -1997,6 +1997,13 @@ void ObjModel_SampleJointTransform(ObjModel* model, int b, int idx, f32 t, f32 s
         outRot[0] = 0;
         outRot[1] = 0;
         outRot[2] = 0;
+#ifdef __SWITCH__
+        // The GameCube code falls through and reads animationModelPtrs, which is NULL for a model without
+        // animations (modelLoadAnimations returns early). That read crashed on Switch when the shader tour
+        // warped the player (playerCacheMoveRootHeights, 11192026-1205 crash report). The zeros above are
+        // the result; ObjAnim_SetCurrentMove makes the same animationCount check and returns.
+        return;
+#endif
     }
     if (b != 0)
     {

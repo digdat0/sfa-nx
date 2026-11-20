@@ -856,7 +856,8 @@ void gameTimerRun(void* context) {
             panByte = (f32)(((int)(80.0f * (gModelEngineTimerValue / gModelEngineTimerDuration)) & 0xFF) + 0x2F);
             volume = 0.6f * (gModelEngineTimerValue / gModelEngineTimerDuration) + 0.7f;
         }
-        Sfx_SetObjectSfxVolume(0, SFXTRIG_sc_commsbleep_28c, panByte, volume);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        Sfx_SetObjectSfxVolume(0, SFXTRIG_sc_commsbleep_28c, (s32)(panByte), volume);
     }
 
     if ((gModelEngineTimerFlags & 0x10) != 0 && pauseMenuState == 0 && getHudHiddenFrameCount() == 0) {

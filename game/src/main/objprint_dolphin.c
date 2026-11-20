@@ -2555,7 +2555,8 @@ void objRenderFuzzShells(GameObject* obj) {
     gObjFuzzStep = 1;
     model = (int*)Obj_GetActiveModel(obj);
     savedMtx = curObjMtx;
-    gObjFuzzPhaseLatched = gObjFuzzPhase;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gObjFuzzPhaseLatched = (s32)(gObjFuzzPhase);
     ObjModel_SetRenderCallback((u8*)model, objFuzzShellRenderCb);
     for (gObjFuzzLayerIndex = 0; gObjFuzzLayerIndex < 16; gObjFuzzLayerIndex += gObjFuzzStep) {
         modelDoRenderInstrs(obj, obj->ownerObj ? obj->ownerObj : obj, (u8*)((ObjModel*)model)->file, 8);
@@ -2575,7 +2576,8 @@ void objRenderFuzzShadowShells(GameObject* obj) {
     gObjFuzzStep = 4;
     model = (int*)Obj_GetActiveModel(obj);
     savedMtx = curObjMtx;
-    gObjFuzzPhaseLatched = gObjFuzzPhase;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gObjFuzzPhaseLatched = (s32)(gObjFuzzPhase);
     for (gObjFuzzLayerIndex = 0; gObjFuzzLayerIndex < 16; gObjFuzzLayerIndex += gObjFuzzStep) {
         modelDoRenderInstrs(obj, obj->ownerObj ? obj->ownerObj : obj, (u8*)((ObjModel*)model)->file, 2);
         curObjMtx = savedMtx;

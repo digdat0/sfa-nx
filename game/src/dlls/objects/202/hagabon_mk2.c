@@ -363,7 +363,8 @@ void hagabonMK2_updateB(GameObject* obj, u8* state)
         {
             f32 t = ((EnemyState*)state)->crawler.engineTimer;
             Sfx_SetObjectSfxVolume(obj, SFXTRIG_baddie_rach_death,
-                                   (127.0f * t) / 2184.0f,
+                                   // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                                   (s32)((127.0f * t) / 2184.0f),
                                    t / 2184.0f);
         }
     }
@@ -463,7 +464,8 @@ void hagabonMK2_update(GameObject* obj, u8* state)
         {
             f32 t = ((EnemyState*)state)->crawler.engineTimer;
             Sfx_SetObjectSfxVolume(obj, SFXTRIG_baddie_rach_death,
-                                   (127.0f * t) / 2184.0f,
+                                   // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                                   (s32)((127.0f * t) / 2184.0f),
                                    t / 2184.0f);
         }
     }

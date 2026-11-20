@@ -1,79 +1,100 @@
-# Foxhollow
+# SFA-NX
 
-Foxhollow is a fully native port of **Star Fox Adventures** for modern platforms, built on the
-[SFA decompilation](https://github.com/zcanann/SFA-Decomp) and
-[Aurora](https://github.com/encounter/aurora).
+Star Fox Adventures for Nintendo Switch homebrew: a native `.nro` port of
+[Foxhollow](https://github.com/JackPriceBurns/foxhollow), the PC port built on the
+[SFA decompilation](https://github.com/zcanann/SFA-Decomp).
 
-This port attempts to stay as true to the original game as possible (bugs included). The port is built using Aurora
-which gives us support for Mac, Windows, Linux, iOS and Android. Foxhollow has been tested and is fully playable for
-Mac, Windows and Linux. There are currently no plans to release for iOS or Android.
+SFA-NX does not include any Nintendo assets. You need your own legally obtained copy of Star Fox Adventures for
+GameCube (GSAE01, GSAP01 or GSAJ01), dumped to an `.iso` file or compressed to an `.rvz` file with Dolphin.
+We do not condone piracy and will not respond to requests for game image files!
 
-You will need a genuine, legally obtained copy of Star Fox Adventures to run Foxhollow (any copy is fine). Foxhollow
-does not distribute any original game assets.
+Note: This is an AI assisted project.
 
-## How to run
+## Getting started
 
-If you're looking to play Foxhollow, please go to https://foxhollow.dev and download the official launcher to play. The
-launcher keeps your game up to date, allows you to manage your saves and also offers a mod library. The instructions
-below are for people who are improving contributing to the port or building mods.
+1. You need a Switch running custom firmware (Atmosphère) and the Homebrew Menu.
+2. Download `SFA-NX.nro` from the [latest release](https://github.com/digdat0/sfa-nx/releases/latest).
+3. Copy it to `sdmc:/switch/SFA-NX/` on your SD card.
+4. Copy your disc image into the same folder. Any file name works, but it must be an `.iso`, `.gcm`
+   or `.rvz` (Dolphin's compressed format, about a third of the size). Convert `.ciso` with Dolphin
+   first. If both an `.iso` and an `.rvz` are there, the `.iso` is used.
+5. Start SFA-NX from the Homebrew Menu, opened by holding **R** while launching a game (title takeover).
+   Applet mode (from the Album) does not have enough memory.
 
-### Prerequisites
+The first start takes longer while shaders are prepared. Save from the game's own menu.
 
-- CMake 3.25+
-- Ninja
-- C++20 compiler
-- Check .github/workflows/publish.yml for platform specific prerequisites
+SFA-NX creates its own folders next to the `.nro`: `config/` (settings), `cache/` (shaders), `user/` (saves) and
+`logs/`.
 
-### Commands
-
-Clone the repo:
-```sh
-# SSH
-git clone --recursive git@github.com:JackPriceBurns/foxhollow.git
-
-# HTTPS
-git clone --recursive https://github.com/JackPriceBurns/foxhollow.git
+```
+sdmc:/switch/SFA-NX/
+  SFA-NX.nro
+  Star Fox Adventures.iso   (or Star Fox Adventures.rvz)
+  mods/hd/              (optional, HD textures)
+  config/  cache/  user/  logs/   (created by SFA-NX)
 ```
 
-Build:
-```sh
-cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFOXHOLLOW_DEBUG_SHORTCUTS=ON
-cmake --build build-debug --target foxhollow
-```
+## Options menu
 
-Start:
-```sh
-./build/foxhollow path/to/disc.iso
-```
+Press **−** in game to open the options menu. **L** / **R** switch between tabs.
 
-When building and launching Foxhollow in debug mode, there is no sound by default and some debug info on the screen. You
-can toggle sound by pressing `m`. 
+- **Game**: Show FPS, Invert look, HD textures, Button mapping, Updates.
+- **Debug**: performance and renderer settings for testing.
 
-## Modding
+Default controls follow the GameCube layout: ZL / ZR are the L / R triggers and R is Z. You can change them
+under **Button mapping**.
 
-Please check out https://foxhollow.dev/modding for a guide on how to build some simple mods. There is currently no easy
-way to introduce whole new game objects, models and animations, there's an open opportunity here for someone interested
-to build that functionality.
+## Updates
 
-With modding you are able to fairly easily switch out assets from the disc, similar to how Dolphin texture packs work.
-You can also patch pretty much every function in the game so there should be a lot of freedom to be able to build what
-you like.
+Open **−** → **Updates** and press **A** to check GitHub for a newer release. If one is available, press **A**
+to download it, then **A** again to restart into the new version. Your saves, settings and mods are kept.
+The console needs an internet connection.
 
-## Contributing
+## HD textures
 
-Anyone is allowed to contribute but make sure everything is thoroughly tested. Create a PR into main with your change
-and provide a descriptive PR description. AI is allowed, but any changes must be thoroughly tested and AI must not be
-used for writing PR descriptions, documentation, commit messages, code comments or anything that should be read by
-another human.
+SFA-NX supports the community HD texture pack.
+
+1. Download the pack from [GameBanana](https://gamebanana.com/mods/151176).
+2. Open the `GSA` folder inside the download and copy everything in it (`Bosses`, `Cape Claw`, ...) into
+   `sdmc:/switch/SFA-NX/mods/hd/`.
+3. HD textures are on by default. You can turn them off with **−** → **HD textures**; the change applies at
+   the next start.
+
+## Building
+
+See [switch/README.md](switch/README.md). It needs devkitPro (devkitA64, libnx, deko3d) on Windows.
+[docs/SWITCH_PORT.md](docs/SWITCH_PORT.md) describes how the port works and how it was optimised for the Switch.
+
+## AI-assisted development
+
+SFA-NX was built with AI assistance (Claude Code): the Switch code, documentation and commit messages were
+written with AI and tested on Switch hardware and in Ryujinx.
+
+Foxhollow's author has asked that contributions to Foxhollow be written by humans, without AI-generated
+commit messages, pull requests or code comments. We respect that. SFA-NX is an independent project: nothing
+from it is submitted to Foxhollow, and please don't send it there or report SFA-NX problems to Foxhollow.
+
+SFA-NX follows its own standards: code and changes are documented thoroughly so the port is easy to follow
+and maintain.
 
 ## Credits
 
-- [SFA-Decomp](https://github.com/zcanann/SFA-Decomp) the decompilation this port is built from
-- [encounter](https://github.com/encounter) Aurora, Borealis and nod
-- [Dusklight](https://twilitrealm.dev/) (TwilitRealm) and [Starship](https://github.com/HarbourMasters/Starship)
-  (Harbour Masters)
+SFA-NX is built on the work of these projects and people:
 
-## Legal
+- [Foxhollow](https://github.com/JackPriceBurns/foxhollow) by Jack Price-Burns: the native Star Fox Adventures
+  port this is based on.
+- [SFA-Decomp](https://github.com/zcanann/SFA-Decomp) by zcanann and contributors: the decompilation.
+- [Aurora](https://github.com/encounter/aurora) by encounter: the GameCube/Wii platform layer.
+- [Dawn](https://dawn.googlesource.com/dawn) and Tint (Google): WebGPU and shader translation.
+- [SDL](https://github.com/libsdl-org/SDL): input, audio and windowing.
+- [devkitPro](https://devkitpro.org/): devkitA64, libnx, deko3d and the portlibs (curl, zlib).
+- [uam](https://github.com/devkitPro/uam) by fincs, with Mesa: the deko3d shader compiler.
+- Melee-NX by KawaiiBunga, KartPadNX, and [centollOS/SwitchWaker](https://github.com/centollOS/SwitchWaker): the
+  deko3d renderer and Switch platform layer (MIT and MPL-2.0, see [switch/deko/THIRD_PARTY.md](switch/deko/THIRD_PARTY.md)).
+- [borealis](https://github.com/encounter/borealis), MusyX and
+  [nlohmann/json](https://github.com/nlohmann/json).
+- The authors of the [Star Fox Adventures HD texture pack](https://gamebanana.com/mods/151176).
+- [Zeedif](https://www.steamgriddb.com/profile/76561198108269802): the app icon, from
+  [SteamGridDB](https://www.steamgriddb.com/grid/693481).
 
-This project is not affiliated with, endorsed by, or sponsored by Nintendo or Rare. It does not contain or distribute
-any original game assets, executables, or copyrighted material. A retail copy of the game is required to use it.
+Star Fox Adventures is © Nintendo and Rare. This project is not affiliated with or endorsed by Nintendo.

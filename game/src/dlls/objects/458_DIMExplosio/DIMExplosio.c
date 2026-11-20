@@ -158,7 +158,8 @@ void explosion_spawnFlame(GameObject* obj, u8 generation, f32 speed, f32 x, f32 
         flames[flameIndex].scale = initialSpeed - gExplosionDebrisSpeedScale * curve;
         curve = expf((sExplosionFadeOutExponent[0] * (f32)flames[flameIndex].age) / (f32)flames[flameIndex].lifetime);
         curve = sExplosionColorMax[0] * curve;
-        flames[flameIndex].alpha = sExplosionColorMax[0] - gExplosionDebrisAlphaScale * curve;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        flames[flameIndex].alpha = (s32)(sExplosionColorMax[0] - gExplosionDebrisAlphaScale * curve);
         flames[flameIndex].spawnTimer = sExplosionSpawnDelay[0];
         flames[flameIndex].spawnInterval = flames[flameIndex].spawnTimer;
         flames[flameIndex].active = 1;
@@ -275,11 +276,12 @@ void explosion_render(GameObject* obj, int renderArg2, int renderArg3, int rende
                 PSMTXConcat((MtxPtr)Camera_GetViewMatrix(), mE, mE);
                 GXLoadPosMtxImm((const f32(*)[4])mE, GX_PNMTX0);
                 ((u8*)&colA)[3] = ((DimExplosionFlame*)cursor)->alpha;
-                cv = gExplosionDebrisColorScale *
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                cv = (s32)(gExplosionDebrisColorScale *
                      (sExplosionColorMax[0] *
                       expf((sExplosionFlickerExponent[0] *
                             ((f32)((DimExplosionFlame*)cursor)->lifetime - (f32)((DimExplosionFlame*)cursor)->age)) /
-                           (f32)((DimExplosionFlame*)cursor)->lifetime));
+                           (f32)((DimExplosionFlame*)cursor)->lifetime)));
                 ((u8*)&colB)[0] = cv;
                 ((u8*)&colB)[1] = cv;
                 ((u8*)&colB)[2] = cv;
@@ -512,7 +514,8 @@ void explosion_update(GameObject* obj) {
                 f32 frac =
                     (f32)((DimExplosionState*)state)->frameCounter / (f32)((DimExplosionState*)state)->lifeFrames;
                 (obj)->anim.rootMotionScale = 0.1f * (frac * ((DimExplosionState*)state)->scale);
-                (obj)->anim.alpha = sExplosionColorMax[0] - sExplosionColorMax[0] * frac;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                (obj)->anim.alpha = (s32)(sExplosionColorMax[0] - sExplosionColorMax[0] * frac);
             }
             if (((DimExplosionState*)state)->halfLifeFired == 0 &&
                 ((DimExplosionState*)state)->frameCounter >= (((DimExplosionState*)state)->lifeFrames >> 1)) {

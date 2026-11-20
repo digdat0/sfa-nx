@@ -45,6 +45,9 @@ struct RawTextureReplacement {
 
 struct ReplacementOptions {
   int32_t priority = 0;
+  // SFA-NX: optional per-file filter; files it rejects are not registered (switch/src/hd_textures_switch.cpp
+  // uses it to skip textures the curated pack leaves out).
+  bool (*accept)(std::string_view filename) = nullptr;
 };
 
 struct ReplacementRegistration {

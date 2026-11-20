@@ -91,6 +91,17 @@ void sfaSrand(unsigned int seed);
 #define GXSetCullMode fhGXSetCullMode
 void fhLoadIdentityPosMtx(void);
 void fhAIPump(void);
+/* Audio mixing on its own thread (default on; the - menu "Audio thread" item on Switch). */
+int fhAIThreaded(void);
+void fhAISetThreaded(int on);
+/* os_shim.c: the "interrupts off" lock shared with the audio thread. */
+void fhIrqEnterHandler(void);
+void fhIrqLeaveHandler(void);
+int fhIrqSuspend(void);
+void fhIrqResume(int held);
+int fhMovieDecodeStart(int (*job)(int));
+int fhMovieDecodeBusy(void);
+void fhMovieDecodeWait(void);
 uintptr_t fhAIGetDMAStartAddr(void);
 int fhAIPrepareStream(void* fileInfo);
 void fhControlsInit(void);

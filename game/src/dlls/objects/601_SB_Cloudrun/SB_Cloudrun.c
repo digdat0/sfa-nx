@@ -46,6 +46,9 @@
 #include "sys/objects/lifecycle.h"
 #include "main/objseq.h"
 #include "dlls/objects/488_SB_Galleon.h"
+#ifdef __SWITCH__
+int sfaSwitchInvertLook(void);
+#endif
 
 
 typedef struct SBCloudRunnerBurstSetup
@@ -769,6 +772,12 @@ void SB_CloudRunner_update(GameObject* obj)
     setAButtonIcon(6);
     state->stickX = padGetStickX(0);
     state->stickY = padGetStickY(0);
+#ifdef __SWITCH__
+    // SFA-NX: the - menu's Invert look flips the vertical steering in the cloud run.
+    if (sfaSwitchInvertLook()) {
+        state->stickY = -state->stickY;
+    }
+#endif
     if (state->targetObj == NULL)
     {
         int count;

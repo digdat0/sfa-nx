@@ -120,6 +120,9 @@
 #include "main/dll/dll_005A_staffcollision.h"
 #include "main/gameloop_gamebit.h"
 #include "track/intersect_render_setup.h"
+#ifdef __SWITCH__
+int sfaSwitchInvertLook(void);
+#endif
 
 #define CLAMP_EXPR(value, low, high) ((value) < (low) ? (low) : ((value) > (high) ? (high) : (value)))
 
@@ -4345,6 +4348,12 @@ int playerStateAimStaff(GameObject* obj, PlayerState* state, f32 fv) {
         f32 c;
         f32 a;
         t = state->baddie.moveInputZ / 56.0f;
+#ifdef __SWITCH__
+        // SFA-NX: the - menu's Invert look flips the vertical look input here.
+        if (sfaSwitchInvertLook()) {
+            t = -t;
+        }
+#endif
         c = (t < -1.0f) ? -1.0f : ((t > 1.0f) ? 1.0f : t);
         inner->aimInputZ = inner->aimInputZ + interpolate(c - inner->aimInputZ, 0.1f, timeDelta);
         t = state->baddie.moveInputX / 56.0f;
@@ -9458,7 +9467,8 @@ int playerStateIdle(GameObject* obj, PlayerState* state, f32 fv) {
         if (inner->targetYawRate < 0) {
             step = -step;
         }
-        inner->targetYaw = (u16)(182.044f * step + (f32)inner->targetYaw);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        inner->targetYaw = (u16)(s32)(182.044f * step + (f32)inner->targetYaw);
         step = interpolate((f32)inner->yawRateSigned, 1.0f / inner->yawSmoothRate, timeDelta);
         lim = inner->yawRateLimit * timeDelta;
         step = (step < lim) ? step : lim;
@@ -13886,7 +13896,9 @@ void playerUpdateSurfaceResponse(GameObject* obj, PlayerState* state, PlayerStat
             break;
         case 28:
             if (mainGetBit(0x21) == 0) {
-                state->periodicHitTimer += dt;
+                // SFA-NX: written out instead of += so the float sum goes through (s32) before the unsigned timer
+                // (the GameCube wrapped here; AArch64 would clamp; docs/SWITCH_PORT.md).
+                state->periodicHitTimer = (s32)(state->periodicHitTimer + dt);
                 if (0x78 < state->periodicHitTimer) {
                     state->periodicHitTimer -= 0x78;
                     ObjPath_GetPointWorldPosition(obj, 0xb, &pos[0], &pos[1], &pos[2], 0);

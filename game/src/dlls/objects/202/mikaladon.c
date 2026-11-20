@@ -160,7 +160,8 @@ void mikaladon_update(GameObject* obj, EnemyState* state)
     f32 cosOut;
 
     state->phaseAngle =
-        MIKALADON_ORBIT_ANGLE_SPEED * timeDelta + (f32)(u32)state->phaseAngle;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)(MIKALADON_ORBIT_ANGLE_SPEED * timeDelta + (f32)(u32)state->phaseAngle);
     angleToVec2Precise(state->phaseAngle, &sinOut, &cosOut);
     sinOut = sinOut * state->aggroRange + state->mikaladon.orbitCenterX;
     cosOut = cosOut * state->aggroRange + state->mikaladon.orbitCenterZ;
@@ -190,7 +191,8 @@ void mikaladon_update(GameObject* obj, EnemyState* state)
         else
         {
             state->userData2 =
-                (f32)(u32)state->userData2 + timeDelta;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                (s32)((f32)(u32)state->userData2 + timeDelta);
             if (state->userData2 > MIKALADON_DROP_INTERVAL)
             {
                 state->userData2 = 0;

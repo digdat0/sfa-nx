@@ -9,3 +9,14 @@ compile_commands.json
 CMakeUserPresets.json
 *.log
 mods/*/lib/
+
+# Switch port
+/ref/
+/build-switch*/
+/debug/
+/build-*.log
+/switch/icon.jpg
+/sfa_logoicon.jpg
+/sfa_icon.png
+/sonic.gif
+__pycache__/

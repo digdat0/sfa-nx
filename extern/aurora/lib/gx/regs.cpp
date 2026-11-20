@@ -572,7 +572,9 @@ constexpr auto kBpRegs = [] {
   regs[0xF2] = {bp_fog_color, DirtyUniform};
   regs[0xF3] = {bp_alpha_compare, DirtyPipeline};
   for (u8 r = 0xF6; r <= 0xFD; ++r) {
-    regs[r] = {bp_ksel, DirtyPipeline};
+    // SFA-NX: also DirtyUniform. The uniform block is now rebuilt only when the pipeline config changed
+    // (command_processor.cpp), and the konstant colour selects feed the uniform, so they must mark it.
+    regs[r] = {bp_ksel, DirtyPipeline | DirtyUniform};
   }
   return regs;
 }();

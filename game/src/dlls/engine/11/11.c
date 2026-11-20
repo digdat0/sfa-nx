@@ -498,7 +498,8 @@ void modgfx_stepVertexAlpha(PartfxEffectState* state, ModgfxVertexGroupCmd* comm
         {
             for (i = 0; i < command->indexCount; i++)
             {
-                baseVertices[command->indices[i]].alpha = target;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                baseVertices[command->indices[i]].alpha = (s32)(target);
                 vertices[command->indices[i]].alpha = baseVertices[command->indices[i]].alpha;
             }
             return;
@@ -517,7 +518,8 @@ void modgfx_stepVertexAlpha(PartfxEffectState* state, ModgfxVertexGroupCmd* comm
 
     for (i = 0; i < command->indexCount; i++)
     {
-        vertices[command->indices[i]].alpha = state->alphaValues[alphaIndex + 1];
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        vertices[command->indices[i]].alpha = (s32)(state->alphaValues[alphaIndex + 1]);
         baseVertices[command->indices[i]].alpha = vertices[command->indices[i]].alpha;
     }
 }
@@ -1268,7 +1270,8 @@ void dll_0B_updateActiveEffects(void)
                                                       0x200001, -1, 0);
                                 }
                                 ((PartfxEffectState*)eff)->requestedStage =
-                                    ((GfxCmd*)(PENDING_SPAWNS + emIdx * sizeof(GfxCmd)))->y;
+                                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                                    (s32)(((GfxCmd*)(PENDING_SPAWNS + emIdx * sizeof(GfxCmd)))->y);
                                 break;
                             }
                         }
@@ -1355,7 +1358,8 @@ void dll_0B_updateActiveEffects(void)
                         ((PartfxEffectState*)eff)->sourceAlphaCurrent = MODGFX_ZERO;
                     }
                     (*(GameObject**)&((PartfxEffectState*)eff)->sourceObject)->anim.alpha =
-                        ((PartfxEffectState*)eff)->sourceAlphaCurrent;
+                        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                        (s32)(((PartfxEffectState*)eff)->sourceAlphaCurrent);
                 }
                 if (((GfxCmd*)(PENDING_SPAWNS + emOff))->mode & 0x400000)
                 {

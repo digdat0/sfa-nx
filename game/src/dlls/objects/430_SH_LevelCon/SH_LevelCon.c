@@ -37,6 +37,10 @@
 #include "main/sky_interface.h"
 #include "sys/objects.h"
 
+/* SFA-NX: null-safe. The GameCube read junk through a null object pointer instead of faulting; the shader
+ * tour warps in before ThornTail spawns (build 1232 crash at doThornTailEvents). */
+#define SH_OBJ_READY(o) ((o) != NULL && ((o)->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0)
+
 #define SH_LEVELCONTROL_FLAG_REFRESH_MAP 0x2 /* re-apply map music on next tick; cleared at substate/music transitions */
 #define SH_LEVELCONTROL_FLAG_THORNTAIL_TRIGGERED 0x40 /* ThornTail intro event already fired */
 #define SH_LEVELCONTROL_FLAG_EARLY_SCENE_STARTED 0x80 /* early cutscene sequence begun */
@@ -326,7 +330,7 @@ void SH_LevelControl_runBloopEvent(GameObject* obj, ShLevelControlState* state) 
         break;
     case 3:
         if (((*gScreenTransitionInterface)->isFinished() != 0) &&
-            ((((GameObject*)Obj_GetPlayerObject())->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0)) {
+            SH_OBJ_READY((GameObject*)Obj_GetPlayerObject())) {
             mainSetBits(GAMEBIT_ITEM_BigScarabBag_Got, 1);
             (*gObjectTriggerInterface)->runSequence(3, (void*)obj, -1);
             state->eventState = 4;
@@ -337,7 +341,7 @@ void SH_LevelControl_runBloopEvent(GameObject* obj, ShLevelControlState* state) 
         break;
     case 5:
         if (((*gScreenTransitionInterface)->isFinished() != 0) &&
-            ((((GameObject*)Obj_GetPlayerObject())->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0)) {
+            SH_OBJ_READY((GameObject*)Obj_GetPlayerObject())) {
             (*gObjectTriggerInterface)->runSequence(2, (void*)obj, -1);
             state->eventState = 6;
         }
@@ -403,9 +407,9 @@ void SH_LevelControl_doThornTailEvents(void* obj, ShLevelControlState* state) {
         break;
     case 1:
         thornTailObj = (GameObject*)ObjList_FindObjectById(SHOPKEEPER_THORNTAIL_OBJECT_ID);
-        if ((thornTailObj->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+        if (SH_OBJ_READY(thornTailObj)) {
             playerObj = (GameObject*)Obj_GetPlayerObject();
-            if ((playerObj->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+            if (SH_OBJ_READY(playerObj)) {
                 (*gObjectTriggerInterface)->runSequence(6, obj, -1);
                 state->eventState = 7;
                 mainSetBits(GAMEBIT_SH_BloopEventDone, 1);
@@ -422,7 +426,7 @@ void SH_LevelControl_doThornTailEvents(void* obj, ShLevelControlState* state) {
             thornTailObj = (GameObject*)ObjList_FindObjectById(SHOPKEEPER_THORNTAIL_OBJECT_ID);
             if (thornTailObj != 0) {
                 playerObj = (GameObject*)Obj_GetPlayerObject();
-                if ((playerObj->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+                if (SH_OBJ_READY(playerObj)) {
                     if (isScreenTransitionActive() != 0) {
                         mainSetBits(GAMEBIT_ITEM_MoonPassKey_Got, 1);
                         (*gObjectTriggerInterface)->runSequence(1, obj, -1);
@@ -437,7 +441,7 @@ void SH_LevelControl_doThornTailEvents(void* obj, ShLevelControlState* state) {
             thornTailObj = (GameObject*)ObjList_FindObjectById(SHOPKEEPER_THORNTAIL_OBJECT_ID);
             if (thornTailObj != 0) {
                 playerObj = (GameObject*)Obj_GetPlayerObject();
-                if ((playerObj->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+                if (SH_OBJ_READY(playerObj)) {
                     (*gObjectTriggerInterface)->runSequence(1, obj, -1);
                     state->flags |= SH_LEVELCONTROL_FLAG_THORNTAIL_TRIGGERED;
                 }
@@ -464,7 +468,7 @@ void SH_LevelControl_doEarlyScenes(GameObject* obj, ShLevelControlState* state) 
             buttonDisable(0, PAD_BUTTON_B);
             buttonDisable(0, PAD_BUTTON_MENU);
             playerObj = (GameObject*)Obj_GetPlayerObject();
-            if ((playerObj->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+            if (SH_OBJ_READY(playerObj)) {
                 (*gObjectTriggerInterface)->runSequence(0, obj, -1);
                 mainSetBits(GAMEBIT_SH_TalkedToPepper, 1);
             }
@@ -484,7 +488,7 @@ void SH_LevelControl_doEarlyScenes(GameObject* obj, ShLevelControlState* state) 
         mainGetBit(GAMEBIT_STAFF_TUTORIAL_SHARPCLAW_DEAD_1) != 0 &&
         mainGetBit(GAMEBIT_STAFF_TUTORIAL_SHARPCLAW_DEAD_2) != 0) {
         playerObj = (GameObject*)Obj_GetPlayerObject();
-        if ((playerObj->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+        if (SH_OBJ_READY(playerObj)) {
             mainSetBits(GAMEBIT_STAFF_TUTORIAL_ARENA_CLEARED, 1);
         }
     }
@@ -603,7 +607,7 @@ void SH_LevelControl_update(GameObject* obj) {
                 buttonDisable(0, PAD_BUTTON_B);
                 buttonDisable(0, PAD_BUTTON_MENU);
                 player = Obj_GetPlayerObject();
-                if ((player->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+                if (SH_OBJ_READY(player)) {
                     (*gObjectTriggerInterface)->runSequence(7, (void*)obj, 0xffffffff);
                     mainSetBits(GAMEBIT_SH_PushedSwitchInWell, 1);
                 }
@@ -631,7 +635,7 @@ void SH_LevelControl_update(GameObject* obj) {
         }
         val = mainGetBit(GAMEBIT_SH_Related0090);
         if (((val != 0) && (val = mainGetBit(GAMEBIT_SH_Related0EB3), val == 0)) &&
-            (player = Obj_GetPlayerObject(), (player->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0)) {
+            (player = Obj_GetPlayerObject(), SH_OBJ_READY(player))) {
             mainSetBits(GAMEBIT_SH_Related0EB3, 1);
         }
         break;
@@ -658,7 +662,7 @@ void SH_LevelControl_update(GameObject* obj) {
                 buttonDisable(0, PAD_BUTTON_B);
                 buttonDisable(0, PAD_BUTTON_MENU);
                 player = Obj_GetPlayerObject();
-                if ((player->objectFlags & OBJECT_OBJFLAG_PARENT_SLACK) == 0) {
+                if (SH_OBJ_READY(player)) {
                     (*gObjectTriggerInterface)->runSequence(4, (void*)obj, 0xffffffff);
                     mainSetBits(GAMEBIT_SH_Related0177, 1);
                 }

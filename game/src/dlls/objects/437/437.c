@@ -463,11 +463,13 @@ static int Lightfoot_UpdateButtonTimingChallenge(GameObject* obj, BaddieState* s
     if (obj->userData2 == LIGHTFOOT_INTERACTION_ACTIVE) {
         control->meterPhaseTwoFramesAgo = control->previousMeterPhase;
         control->previousMeterPhase = control->meterPhase;
-        control->meterPhase += (u16)(1200.0f * timeDelta);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        control->meterPhase += (u16)(s32)(1200.0f * timeDelta);
     }
     if (control->moveIndex < 4) {
         s16 meterPosition = (s16)(90.0f * mathSinf(3.1415927f * control->meterPhase / 32768.0f));
-        u16 successRange = (u16)(90.0f * sLightfootChallengeData.meterScales[control->challengeDifficulty]);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        u16 successRange = (u16)(s32)(90.0f * sLightfootChallengeData.meterScales[control->challengeDifficulty]);
         if (obj->userData2 == LIGHTFOOT_INTERACTION_ACTIVE) {
             if ((s16)control->meterPhase * (s16)control->previousMeterPhase < 0) {
                 Sfx_PlayFromObject(0, SFXTRIG_lockon3_off);
@@ -500,7 +502,8 @@ static int Lightfoot_UpdateButtonTimingChallenge(GameObject* obj, BaddieState* s
             control->meterPhase = (u16)randomGetRange(0, 0xffff);
             control->previousMeterPhase = control->meterPhase;
             control->meterPhaseTwoFramesAgo = control->previousMeterPhase;
-            fearTestMeterSetRange(0x60, (u8)(96.0f * sLightfootChallengeData.meterScales[control->challengeDifficulty]),
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            fearTestMeterSetRange(0x60, (u8)(s32)(96.0f * sLightfootChallengeData.meterScales[control->challengeDifficulty]),
                                   (s16)(90.0f * mathSinf(3.1415927f * control->meterPhase / 32768.0f)));
             fearTestMeterSetFadeIn(1);
             setAButtonIcon(6);

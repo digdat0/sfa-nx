@@ -85,7 +85,8 @@ void mtx44Perspective(f32* matrix, u16* perspectiveNorm, f32 fovY, f32 aspect, f
         if (nearPlane + farPlane <= 2.0f) {
             *perspectiveNorm = 0xFFFF;
         } else {
-            *perspectiveNorm = (u16)(131072.0f / (nearPlane + farPlane));
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            *perspectiveNorm = (u16)(s32)(131072.0f / (nearPlane + farPlane));
             if (*perspectiveNorm == 0) {
                 *perspectiveNorm = 1;
             }

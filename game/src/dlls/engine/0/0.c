@@ -607,7 +607,8 @@ static inline void drawViewFinderHorizontal(f32 directionX, f32 y, f32 startX, f
     extern const GXColor gViewFinderLineColor;
 
     color = gViewFinderLineColor;
-    color.a = 255.0f * fade;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    color.a = (s32)(255.0f * fade);
     angle = getAngle(directionX, 0.0f);
     radians = gGameUiPi * angle / gGameUiAngleDivisor;
     sine = mathSinf(radians);
@@ -646,7 +647,8 @@ static inline void drawViewFinderVertical(f32 directionY, f32 x, f32 startY, f32
     extern const GXColor gViewFinderLineColor;
 
     color = gViewFinderLineColor;
-    color.a = 255.0f * fade;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    color.a = (s32)(255.0f * fade);
     angle = getAngle(0.0f, directionY);
     radians = gGameUiPi * angle / gGameUiAngleDivisor;
     sine = mathSinf(radians);
@@ -1618,11 +1620,13 @@ void drawViewFinderHud(void)
         f32 viewScale;
         drawViewFinderSegment(580.0f, reticleTopY, 580.0f, 410.0f,
                               0.0f, 410.0f - reticleTopY, 1.0f,
-                              hudElementOpacity * gViewFinderFadeLevel);
+                              // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                              (s32)(hudElementOpacity * gViewFinderFadeLevel));
         drawViewFinderSegment(580.0f, reticleY, 580.0f,
                               8.0f + reticleY, 0.0f,
                               (8.0f + reticleY) - reticleY, 6.0f,
-                              hudElementOpacity * gViewFinderFadeLevel);
+                              // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                              (s32)(hudElementOpacity * gViewFinderFadeLevel));
         viewScale = 0.57735 / mathTanf((f32)(gGameUiPi * fovY / 360.0));
         sprintf(buf, sTrickyDebugXCoordFormat, viewScale);
         gameTextSetColor(0, 0xff, 0, (int)(hudElementOpacity * gViewFinderFadeLevel));
@@ -1641,7 +1645,8 @@ void drawViewFinderHud(void)
                 {
                     f32 cosine;
                     f32 currentY, nextY;
-                    u8 alpha = gridAlpha * gViewFinderFadeLevel;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    u8 alpha = (s32)(gridAlpha * gViewFinderFadeLevel);
                     nextGridX = gridSpacing + gridX;
                     nextWavePhase = waveCenterX - nextGridX;
                     cosine = lbl_803DBAE4 * mathCosf(angleScale * (nextWavePhase * lbl_803DBAE0) / angleDivisor);
@@ -1655,7 +1660,8 @@ void drawViewFinderHud(void)
                 }
                 {
                     f32 cosine;
-                    u8 alpha = gridAlpha * gViewFinderFadeLevel;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    u8 alpha = (s32)(gridAlpha * gViewFinderFadeLevel);
                     f32 currentY, nextY;
                     cosine = lbl_803DBAE4 * mathCosf(angleScale * (nextWavePhase * lbl_803DBAE0) / angleDivisor);
                     nextY = (f32)(gViewFinderBaseY + (480.5 + cosine));
@@ -1667,7 +1673,8 @@ void drawViewFinderHud(void)
                 }
                 {
                     f32 cosine;
-                    u8 alpha = (f32)(f64)hudElementOpacity * gViewFinderFadeLevel;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    u8 alpha = (s32)((f32)(f64)hudElementOpacity * gViewFinderFadeLevel);
                     f32 currentY, nextY;
                     cosine = lbl_803DBAE4 * mathCosf(angleScale * (nextWavePhase * lbl_803DBAE0) / angleDivisor);
                     nextY = gViewFinderBaseY + (480.0f + cosine);
@@ -1779,7 +1786,8 @@ void drawViewFinderHud(void)
                                     (int)(gViewFinderBaseY + (495.0f + sn)));
                 }
                 {
-                    u8 alpha = (f32)(u8)tickAlpha * gViewFinderFadeLevel;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    u8 alpha = (s32)((f32)(u8)tickAlpha * gViewFinderFadeLevel);
                     f32 phase = lbl_803E1F34 - tickX;
                     cosine = lbl_803DBAE4 * mathCosf(gGameUiPi * (phase * lbl_803DBAE0) / gGameUiAngleDivisor);
                     nextY = gViewFinderBaseY + ((f32)((u8)tickHeight + 0x1e0) + cosine);
@@ -1842,7 +1850,8 @@ void hudDrawTimedElement(int unused, void* element)
     memset(gHudTimedElementTexSlot, 0, 0xc);
     gHudTimedElementTexSlot[0] = (int)e->texture;
     gHudTimedElementTexSlot[3] = 0;
-    drawTexture(gHudTimedElementTexSlot, 36.0f, (f32)(gGameUiScreenHeightOffset + 0xaf), (u8)e->alpha, 0x100);
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    drawTexture(gHudTimedElementTexSlot, 36.0f, (f32)(gGameUiScreenHeightOffset + 0xaf), (u8)(s32)e->alpha, 0x100);
 }
 
 
@@ -1934,7 +1943,8 @@ void hudDrawStatusBarsAndCounters(int unused1, int unused2, int unused3)
         if (t < 0.0f)
             gHudStatusFadeOpacity = 0.0f;
     }
-    alpha = gHudStatusAlpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    alpha = (s32)(gHudStatusAlpha);
     if (alpha != 0)
     {
         int cell = coordsToMapCell(player->anim.localPosX, player->anim.localPosZ);
@@ -3732,7 +3742,8 @@ int cMenuRingIconRenderFn(GameObject* obj, ObjModel* model, int idx)
         }
         else
         {
-            cfg.a = 0.3f * (f32)(u32)obj->anim.renderAlpha;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            cfg.a = (s32)(0.3f * (f32)(u32)obj->anim.renderAlpha);
         }
         addTexLayerStageSwizzled(tex, NULL, 0, &cfg, 0, 1);
     }
@@ -4681,14 +4692,16 @@ void pauseMenuDraw(int boxDrawParamA, int boxDrawParamB, int boxDrawParamC)
                 textHeight = boundsRight - boundsLeft;
                 gPauseMenuActiveGrid[0].trailX = textHeight;
                 gPauseMenuActiveGrid[0].x =
-                    gPauseMenuTextScale * (f32)(s32)(textBox->x + textBox->width - (textHeight >> 1) - 0x140) + lbl_803E1F34;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    (s32)(gPauseMenuTextScale * (f32)(s32)(textBox->x + textBox->width - (textHeight >> 1) - 0x140) + lbl_803E1F34);
 
                 textBox = gameTextGetBox(0x80);
                 gameTextMeasureById(0x3cc, 0, 0, &boundsLeft, &boundsRight, &boundsTop, &boundsBottom);
                 textHeight = boundsRight - boundsLeft;
                 gPauseMenuActiveGrid[1].trailX = textHeight;
                 x = textBox->x + (textHeight >> 1) - 0x140;
-                gPauseMenuActiveGrid[1].x = gPauseMenuTextScale * (f32)x + lbl_803E1F34;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                gPauseMenuActiveGrid[1].x = (s32)(gPauseMenuTextScale * (f32)x + lbl_803E1F34);
 
                 if (gPauseMenuGridCursor != 0)
                 {

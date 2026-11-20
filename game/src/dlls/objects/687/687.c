@@ -245,7 +245,8 @@ void tree_update(GameObject* obj)
             dx = obj->anim.localPosX - player->anim.localPosX;
             dz = obj->anim.localPosZ - player->anim.localPosZ;
             dist = sqrtf(dx * dx + dz * dz);
-            playerDist = dist;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            playerDist = (s32)(dist);
             if (playerDist < state->proximityRadius)
             {
                 if ((state->flags & TREE_FLAG_PLAYER_PROXIMITY_BURST) &&

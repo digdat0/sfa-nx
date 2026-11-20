@@ -208,6 +208,7 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexce
 
 void shutdown() noexcept {
 #ifdef AURORA_ENABLE_GX
+  gx::fifo::drain(); // a frame handed to the FIFO thread (frame overlap) finishes first
   gx::fifo::shutdown();
   gfx::render_worker::synchronize();
 #ifdef AURORA_ENABLE_RMLUI
@@ -233,6 +234,19 @@ const AuroraEvent* update() noexcept {
   return window::poll_events();
 }
 
+#ifdef AURORA_ENABLE_GX
+// SFA-NX frame overlap (- menu "Frame overlap"): end_frame hands the frame to the FIFO thread, which ends
+// its recording and opens the next one once it has processed the frame's commands, while the game thread
+// already runs the next frame. Without it the game thread waited for the FIFO thread every frame (build
+// 2046: 9.3 ms of a 21.6 ms frame). The GameCube's GPU also ran a frame behind the CPU.
+std::atomic_bool g_frameOverlap{true};
+// A gfx frame is being recorded. Written by the thread that opens or ends it: the game thread, or the FIFO
+// thread at a frame boundary; the FIFO queue's atomics order the hand-over.
+bool g_gfxFrameOpen = false;
+// Game thread only: the FIFO thread opens the next gfx frame at the pending boundary.
+bool g_nextFrameBegun = false;
+#endif
+
 bool begin_frame() noexcept {
   ZoneScoped;
 #ifdef AURORA_ENABLE_GX
@@ -253,22 +267,24 @@ bool begin_frame() noexcept {
   }
 
   imgui::new_frame(window::get_window_size());
-  if (!gfx::begin_frame()) {
-    return false;
+  if (g_nextFrameBegun) {
+    g_nextFrameBegun = false;
+  } else {
+    if (!gfx::begin_frame()) {
+      return false;
+    }
+    g_gfxFrameOpen = true;
   }
   gx::fifo::begin_frame();
 #endif
   return true;
 }
 
-void end_frame() noexcept {
-  ZoneScoped;
 #ifdef AURORA_ENABLE_GX
-  gx::fifo::drain();
-  gx::fifo::end_frame();
+// Ends the open gfx frame's recording and queues its submit and present (render worker).
+void submit_frame(imgui::DrawData imguiDrawData) noexcept {
   gx::texture::end_frame();
   gfx::finish();
-  auto imguiDrawData = imgui::freeze();
 
   const auto& presentSource = webgpu::present_source();
   const auto viewport = webgpu::calculate_present_viewport(webgpu::g_graphicsConfig.surfaceConfiguration.width,
@@ -440,7 +456,39 @@ void end_frame() noexcept {
     TracyPlot("aurora: lastStorageSize", static_cast<int64_t>(stats.lastStorageSize));
     TracyPlot("aurora: lastTextureUploadSize", static_cast<int64_t>(stats.lastTextureUploadSize));
   });
+}
+#endif
 
+// Ends the game's frame. With frame overlap on (and the FIFO on its own thread), the frame's ImGui data is
+// captured now and the rest is queued behind the frame's GX commands: the FIFO thread then submits it and
+// opens the next gfx frame, and begin_frame on the game thread finds it already open (g_nextFrameBegun).
+// Otherwise the game thread drains the FIFO and submits here, as upstream does.
+void end_frame() noexcept {
+  ZoneScoped;
+#ifdef AURORA_ENABLE_GX
+#ifndef AURORA_ENABLE_RMLUI
+  if (g_frameOverlap.load(std::memory_order_relaxed) &&
+      gx::fifo::processing_mode() == gx::fifo::ProcessingMode::Thread) {
+    gx::fifo::set_frame_inactive();
+    auto drawData = std::make_shared<imgui::DrawData>(imgui::freeze());
+    gx::fifo::end_frame_async([drawData] {
+      if (g_gfxFrameOpen) {
+        gx::fifo::clear_draw_cache();
+        submit_frame(std::move(*drawData));
+      }
+      g_gfxFrameOpen = gfx::begin_frame();
+    });
+    g_nextFrameBegun = true;
+    return;
+  }
+#endif
+  gx::fifo::drain();
+  gx::fifo::end_frame();
+  auto imguiDrawData = imgui::freeze();
+  if (g_gfxFrameOpen) {
+    submit_frame(std::move(imguiDrawData));
+    g_gfxFrameOpen = false;
+  }
 #endif
 }
 } // namespace
@@ -454,6 +502,10 @@ void aurora_shutdown() { aurora::shutdown(); }
 const AuroraEvent* aurora_update() { return aurora::update(); }
 bool aurora_begin_frame() { return aurora::begin_frame(); }
 void aurora_end_frame() { aurora::end_frame(); }
+#ifdef AURORA_ENABLE_GX
+extern "C" void aurora_set_frame_overlap(bool value) { aurora::g_frameOverlap.store(value, std::memory_order_relaxed); }
+extern "C" bool aurora_frame_overlap() { return aurora::g_frameOverlap.load(std::memory_order_relaxed); }
+#endif
 SDL_Window* aurora_get_window() { return aurora::window::get_sdl_window(); }
 AuroraWindowSize aurora_get_window_size() {
   return aurora::window::get_sdl_window() != nullptr ? aurora::window::get_window_size() : AuroraWindowSize{};

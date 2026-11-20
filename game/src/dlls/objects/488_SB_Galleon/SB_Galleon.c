@@ -845,46 +845,56 @@ void SB_Galleon_updateSkyLighting(GameObject* obj, SBGalleonState* state) {
     }
     {
         int red = gSbGalleonSkyColorAStart[0];
-        gSbGalleonSkyColorA[0] = red + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorAEnd[0] - red);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorA[0] = (s32)(red + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorAEnd[0] - red));
     }
     {
         int green = gSbGalleonSkyColorAStart[1];
-        gSbGalleonSkyColorA[1] = green + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorAEnd[1] - green);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorA[1] = (s32)(green + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorAEnd[1] - green));
     }
     {
         int blue = gSbGalleonSkyColorAStart[2];
-        gSbGalleonSkyColorA[2] = blue + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorAEnd[2] - blue);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorA[2] = (s32)(blue + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorAEnd[2] - blue));
     }
     skySetBaseColor(SBGALLEON_SKY_LIGHT_SLOT, gSbGalleonSkyColorA[0], gSbGalleonSkyColorA[1], gSbGalleonSkyColorA[2],
                     0x40, 0x40);
     {
         int red = gSbGalleonSkyColorBStart[0];
-        gSbGalleonSkyColorB[0] = red + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorBEnd[0] - red);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorB[0] = (s32)(red + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorBEnd[0] - red));
     }
     {
         int green = gSbGalleonSkyColorBStart[1];
-        gSbGalleonSkyColorB[1] = green + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorBEnd[1] - green);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorB[1] = (s32)(green + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorBEnd[1] - green));
     }
     {
         int blue = gSbGalleonSkyColorBStart[2];
-        gSbGalleonSkyColorB[2] = blue + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorBEnd[2] - blue);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorB[2] = (s32)(blue + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorBEnd[2] - blue));
     }
     skySetAmbientColor(SBGALLEON_SKY_LIGHT_SLOT, gSbGalleonSkyColorB[0], gSbGalleonSkyColorB[1],
                        gSbGalleonSkyColorB[2]);
     {
         int red = gSbGalleonSkyColorCStart[0];
-        gSbGalleonSkyColorC[0] = red + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorCEnd[0] - red);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorC[0] = (s32)(red + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorCEnd[0] - red));
     }
     {
         int green = gSbGalleonSkyColorCStart[1];
-        gSbGalleonSkyColorC[1] = green + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorCEnd[1] - green);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorC[1] = (s32)(green + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorCEnd[1] - green));
     }
     {
         int blue = gSbGalleonSkyColorCStart[2];
-        gSbGalleonSkyColorC[2] = blue + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorCEnd[2] - blue);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gSbGalleonSkyColorC[2] = (s32)(blue + gSbGalleonSkyBlendFactor * (gSbGalleonSkyColorCEnd[2] - blue));
     }
     skySetMoonColor(SBGALLEON_SKY_LIGHT_SLOT, gSbGalleonSkyColorC[0], gSbGalleonSkyColorC[1], gSbGalleonSkyColorC[2]);
-    gSbGalleonSkyLightIntensity = gSbGalleonSkyBlendFactor * 128.0f + 32.0f;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gSbGalleonSkyLightIntensity = (s32)(gSbGalleonSkyBlendFactor * 128.0f + 32.0f);
     skySetOverrideLightDirectionEnabled(1);
     skySetOverrideLightDirection(
         gSbGalleonSkyBlendFactor * (overrideDirectionEnd.x - overrideDirectionStart.x) + overrideDirectionStart.x,
@@ -905,7 +915,8 @@ void SB_Galleon_updateSkyLighting(GameObject* obj, SBGalleonState* state) {
         for (; renderOpIndex < activeModel->file->renderOpCount; renderOpIndex++) {
             renderOp = ObjModel_GetRenderOp(activeModel->file, renderOpIndex);
             if (renderOp->layers[0].materialId == 1) {
-                renderOp->alpha = alphaScale * gSbGalleonSkyBlendFactor;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                renderOp->alpha = (s32)(alphaScale * gSbGalleonSkyBlendFactor);
             }
         }
     }
@@ -1127,12 +1138,14 @@ void SB_Galleon_render(GameObject* obj, int p2, int p3, int p4, int p5, s8 visib
     } stk;
     if (visible != 0) {
         if (state->cameraState < 2) {
-            stk.mode = state->wanderA;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            stk.mode = (s32)(state->wanderA);
             stk.c = 570.0f;
             stk.b = 85.0f;
             stk.a = 217.0f;
             (*gPartfxInterface)->spawnObject((void*)obj, SBGALLEON_FX_WANDER, stk.pad, 2, -1, NULL);
-            stk.mode = state->wanderB;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            stk.mode = (s32)(state->wanderB);
             stk.a = -217.0f;
             (*gPartfxInterface)->spawnObject((void*)obj, SBGALLEON_FX_WANDER, stk.pad, 2, -1, NULL);
         }

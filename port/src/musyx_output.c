@@ -14,6 +14,7 @@
 static s16 sMusyxBuffers[FH_MUSYX_BUFFER_COUNT][FH_MUSYX_CHUNK_FRAMES * FH_MUSYX_CHANNELS];
 static u32 sMusyxBufferIndex;
 static SDL_Mutex* sMusyxLock;
+SDL_Mutex* fhIrqMutex(void); /* os_shim.c: the "interrupts off" lock, shared with the audio thread */
 
 static void fhMusyxEnter(void) { SDL_LockMutex(sMusyxLock); }
 
@@ -34,7 +35,7 @@ void fhMusyxConfigure(void) {
   SND_PC_CONFIG config = {FH_MUSYX_MIX_RATE, FH_MUSYX_CHANNELS};
 
   if (sMusyxLock == NULL) {
-    sMusyxLock = SDL_CreateMutex();
+    sMusyxLock = fhIrqMutex(); /* one lock with OSDisableInterrupts: no lock-order deadlock */
   }
   if (sMusyxLock != NULL) {
     sndPCSetSynchronization(fhMusyxEnter, fhMusyxLeave);

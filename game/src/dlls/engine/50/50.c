@@ -48,7 +48,8 @@ void runLoadingScreens(void)
         u8 alpha;
         if (gTitleScreenInitLoadingFrameCounter < 0x1e)
         {
-            alpha = ((gTitleScreenInitAlphaMax * gTitleScreenInitLoadingFrameCounter) / gTitleScreenInitFadeFrames);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            alpha = (s32)(((gTitleScreenInitAlphaMax * gTitleScreenInitLoadingFrameCounter) / gTitleScreenInitFadeFrames));
         }
         else if (gTitleScreenInitLoadingFrameCounter < 0xd2)
         {
@@ -56,8 +57,9 @@ void runLoadingScreens(void)
         }
         else
         {
-            alpha = ((gTitleScreenInitAlphaMax * (f32)(0xf0 - gTitleScreenInitLoadingFrameCounter)) /
-                     gTitleScreenInitFadeFrames);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            alpha = (s32)(((gTitleScreenInitAlphaMax * (f32)(0xf0 - gTitleScreenInitLoadingFrameCounter)) /
+                     gTitleScreenInitFadeFrames));
         }
 
         textureSlot = gTitleScreenInitLoadingTextures[0];

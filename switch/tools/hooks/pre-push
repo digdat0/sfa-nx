@@ -1,0 +1,42 @@
+#!/bin/sh
+# SFA-NX pre-push guard. Install: cp switch/tools/hooks/pre-push .git/hooks/pre-push
+#
+# Refuses a push when a commit that GitHub doesn't have yet
+#   1. is not by digdat0, or carries a Co-Authored-By trailer. Foxhollow's own commits are allowed when they
+#      come from the local "upstream-clean" branch (switch/tools/sync-upstream.sh), which holds Foxhollow's
+#      history with Nintendo assets removed;
+#   2. contains a Nintendo asset or game file anywhere in its tree: the paths stripped from upstream, disc
+#      images, executables, saves and keys. This runs on every pushed commit, upstream ones included.
+z=0000000000000000000000000000000000000000
+
+# Paths and file types that must never be in a commit (keep the paths in step with sync-upstream.sh STRIP).
+BLOCKED_PATHS='^(extern/aurora/assets/screenshot\.png|CLAUDE\.md)$'
+BLOCKED_TYPES='\.(iso|gcm|rvz|ciso|gcz|wbfs|wia|nkit|dol|rel|elf|gci|sav|raw|nsp|xci|nca|keys)$'
+
+# Filtered Foxhollow commits: exempt from the author check only (rule 2 still applies to them).
+UPSTREAM="$(git rev-parse -q --verify refs/heads/upstream-clean)"
+
+while read lref lsha rref rsha; do
+    [ "$lsha" = "$z" ] && continue
+    # only what GitHub doesn't have yet: a new tag or branch is not checked against the whole history
+    # (merged pull requests' commits by others are already public)
+    # (exclusions go before --not: after it, git reads a ^ exclusion as an inclusion)
+    range="$lsha"
+    [ "$rsha" != "$z" ] && git cat-file -e "$rsha" 2>/dev/null && range="$range ^$rsha"
+
+    # 1. identity: our own commits only (upstream-clean's are excluded from this range)
+    own="$range${UPSTREAM:+ ^$UPSTREAM} --not --remotes"
+    range="$range --not --remotes"
+    bad=$(git log --format='%h %ae %ce' $own | grep -v ' digdat0@gmail.com digdat0@gmail.com$' | grep -v ' digdat0@gmail.com noreply@github.com$')
+    if [ -n "$bad" ]; then echo "pre-push: commits not by digdat0:" >&2; echo "$bad" >&2; exit 1; fi
+    if git log --format=%B $own | grep -qi '^co-authored-by:'; then echo "pre-push: Co-Authored-By found" >&2; exit 1; fi
+
+    # 2. assets: every file in every pushed commit's tree
+    for c in $(git rev-list $range); do
+        hit=$(git ls-tree -r --name-only "$c" | grep -i -E "$BLOCKED_PATHS|$BLOCKED_TYPES")
+        if [ -n "$hit" ]; then
+            echo "pre-push: commit $(git log -1 --format='%h %s' "$c") contains blocked files:" >&2
+            echo "$hit" >&2; exit 1
+        fi
+    done
+done

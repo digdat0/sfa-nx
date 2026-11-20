@@ -203,7 +203,8 @@ void Sfx_SetObjectChannelVolume(GameObject* obj, u32 channel, u8 volume, f32 vol
         if (volumeScale > 1.0f) {
             volumeScale = 1.0f;
         }
-        sndFXCtrl14(objectChannel->handle, 0x80, 16383.0f * volumeScale);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        sndFXCtrl14(objectChannel->handle, 0x80, (s32)(16383.0f * volumeScale));
     }
 }
 
@@ -244,7 +245,8 @@ void Sfx_SetObjectSfxVolume(GameObject* obj, u16 sfxId, u8 volume, f32 volumeSca
         if (volumeScale > 1.0f) {
             volumeScale = 1.0f;
         }
-        sndFXCtrl14(objectChannel->handle, 0x80, 16383.0f * volumeScale);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        sndFXCtrl14(objectChannel->handle, 0x80, (s32)(16383.0f * volumeScale));
     }
 }
 

@@ -263,7 +263,8 @@ void Obj_TickModelColorFadeRecursive(GameObject* obj) {
         obj->colorFadeFlags ^= OBJ_COLOR_FADE_FLAG_INCREASING;
     }
 
-    obj->colorFadeAlpha = alpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->colorFadeAlpha = (s32)(alpha);
     if ((obj->colorFadeFlags & OBJ_COLOR_FADE_FLAG_INFINITE) == 0) {
         obj->colorFadeFrames -= framesThisStep;
         if (obj->colorFadeFrames <= 0 && obj->ownerObj == NULL) {

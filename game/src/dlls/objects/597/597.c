@@ -573,7 +573,8 @@ void SnowBike_UpdateEngineFx(GameObject* obj, void* state, f32 localVelZ, int in
             bikeState->unk3F8 = 45.0f;
         }
         channelVol = bikeState->unk3F8;
-        Sfx_SetObjectChannelVolume(obj, 2, channelVol, channelVol / 256.0f + 0.3f);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        Sfx_SetObjectChannelVolume(obj, 2, (s32)(channelVol), channelVol / 256.0f + 0.3f);
         if (intensity > 5)
         {
             bikeState->unk3F4 = 60.0f + intensity;
@@ -594,7 +595,8 @@ void SnowBike_UpdateEngineFx(GameObject* obj, void* state, f32 localVelZ, int in
             bikeState->unk3F4 = 65.0f;
         }
         channelVol4 = bikeState->unk3F4;
-        Sfx_SetObjectChannelVolume(obj, 4, channelVol4, channelVol4 / 100.0f);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        Sfx_SetObjectChannelVolume(obj, 4, (s32)(channelVol4), channelVol4 / 100.0f);
         pulse.unkC = -5.3f;
         pulse.unk10 = 4.4f;
         pulse.unk14 = 24.0f;
@@ -1315,7 +1317,8 @@ void SnowBike_UpdateSteering(short* obj, uintptr_t stateRaw)
                 fb = (80.0f < 3.0f * st->impactShakeTimer) ? 80.0f
                                                                           : 3.0f * st->impactShakeTimer;
                 {
-                    Sfx_SetObjectSfxVolume((GameObject*)obj, SFXTRIG_tr_jbike_bombbeep, fb, 0.1f);
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    Sfx_SetObjectSfxVolume((GameObject*)obj, SFXTRIG_tr_jbike_bombbeep, (s32)(fb), 0.1f);
                 }
             }
         }
@@ -2544,7 +2547,8 @@ void SnowBike_init(GameObject* obj, SnowBikePlacement* params, int flag)
     {
         (*gPathControlInterface)->setLocalPointCollision(&s->pathState, 1, base[0] + 0x40, &gSnowBikeCollisionRadius, 8);
     }
-    s->pathState.activeTimer = 10.0f + gSnowBikeCollisionRadius;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    s->pathState.activeTimer = (s32)(10.0f + gSnowBikeCollisionRadius);
     (*gPathControlInterface)->attachObject((void*)obj, &s->pathState);
 }
 

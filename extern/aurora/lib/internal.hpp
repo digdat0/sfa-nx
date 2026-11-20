@@ -301,6 +301,14 @@ public:
     m_length += size;
   }
 
+  // Grows by size bytes and returns them uninitialised, for the caller to fill in place.
+  uint8_t* append_uninit(size_t size) {
+    resize(m_length + size, false);
+    uint8_t* out = m_data + m_length;
+    m_length += size;
+    return out;
+  }
+
   void release() {
     if (m_data != nullptr && m_owned) {
       free(m_data);

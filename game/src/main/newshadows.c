@@ -1254,8 +1254,9 @@ void createNewShadowDistortionTexture(void)
             dirX *= s;
             normY = lbl_803DEDC0 * normY + 128.0f;
             dirX = lbl_803DEDC0 * dirX + 128.0f;
-            ((NewShadowVectorTexel*)(texel + sizeof(Texture)))->alpha = (u8)normY;
-            ((NewShadowVectorTexel*)(texel + sizeof(Texture)))->intensity = (u8)dirX;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            ((NewShadowVectorTexel*)(texel + sizeof(Texture)))->alpha = (u8)(s32)normY;
+            ((NewShadowVectorTexel*)(texel + sizeof(Texture)))->intensity = (u8)(s32)dirX;
         }
     }
     DCFlushRange(gNewShadowDistortionTexture + 1, gNewShadowDistortionTexture->dataSize);
@@ -1427,8 +1428,9 @@ void newShadowsInitProceduralTextures(void)
                     evalNoisePlacements(rowCoord, columnCoord, frame,
                                 gNewShadowPlacements, noisePlacementCount, &shift, &intensity);
                     noiseTexel = (NewShadowVectorTexel*)(texelAddress + sizeof(Texture));
-                    noiseTexel->alpha = (u8)(255.0f * intensity);
-                    noiseTexel->intensity = (u8)(255.0f * shift);
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    noiseTexel->alpha = (u8)(s32)(255.0f * intensity);
+                    noiseTexel->intensity = (u8)(s32)(255.0f * shift);
                 }
             }
             DCFlushRange(gNewShadowNoiseTexFrames[frame] + 1, gNewShadowNoiseTexFrames[frame]->dataSize);
@@ -1461,8 +1463,9 @@ void newShadowsInitProceduralTextures(void)
             productValue = 127.0f * productValue + 127.0f;
             waveValue = 127.0f * wave + 127.0f;
             causticTexel = (NewShadowVectorTexel*)(texel + sizeof(Texture));
-            causticTexel->alpha = (u8)productValue;
-            causticTexel->intensity = (u8)waveValue;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            causticTexel->alpha = (u8)(s32)productValue;
+            causticTexel->intensity = (u8)(s32)waveValue;
         }
     }
     DCFlushRange(gNewShadowCausticTexture + 1, gNewShadowCausticTexture->dataSize);
@@ -1512,7 +1515,8 @@ static inline void fillDiskTexture(void)
             dx = dx * lbl_803DEDF0;
             dz = dz * lbl_803DEDF0;
             d2 = dx * dx + dz * dz;
-            base[off2] = 255.0f * ((d2 > 1.0f) ? 0.0f : (1.0f - d2));
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            base[off2] = (s32)(255.0f * ((d2 > 1.0f) ? 0.0f : (1.0f - d2)));
         }
     }
 }
@@ -1555,7 +1559,8 @@ static inline void fillSmallDiskTexture(void)
             {
                 d2 = sqrtf(1.0f - d2);
             }
-            base[off2] = 255.0f * d2;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            base[off2] = (s32)(255.0f * d2);
         }
     }
 }
@@ -1619,7 +1624,8 @@ static inline void fillFalloffTexture(void)
             }
             else
             {
-                val = 160.0f * (1.0f - (d2 - lbl_803DED38) / lbl_803DED38);
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                val = (s32)(160.0f * (1.0f - (d2 - lbl_803DED38) / lbl_803DED38));
             }
             base[off2] = val;
         }
@@ -1652,7 +1658,8 @@ static inline void fillLightningTexture(void)
             off2 = off + sizeof(Texture);
             v = sqrtf(__fabsf(c0 * lbl_803DEDD0));
             v = sqrtf(v);
-            base[off2] = 255.0f * (1.0f - v);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            base[off2] = (s32)(255.0f * (1.0f - v));
         }
     }
 }
@@ -1702,7 +1709,8 @@ static inline void fillRingTexture(void)
                 }
                 d2 = sqrtf(d2);
             }
-            base[off2] = 16.0f * d2;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            base[off2] = (s32)(16.0f * d2);
         }
     }
 }
@@ -1909,7 +1917,8 @@ void allocLotsOfTextures(void)
             v = 1.0f - d2;
             if (v < 0.0f)
                 v = 0.0f;
-            base[off2] = 255.0f * v;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            base[off2] = (s32)(255.0f * v);
         }
     }
     DCFlushRange((u8*)gNewShadowRadialTexture + sizeof(Texture), gNewShadowRadialTexture->dataSize);

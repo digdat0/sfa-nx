@@ -904,7 +904,8 @@ void skySetLightSlot(int slot, f32 x, f32 y, f32 z, int red, int green, int blue
         previousComponent = previous->ambientB;
         ambientB = (int)(blend * ((f32)current->ambientB - (f32)previousComponent) + (f32)previousComponent);
         previousComponent = previous->blendAlpha;
-        blendAlpha = blend * ((f32)current->blendAlpha - (f32)previousComponent) + (f32)previousComponent;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        blendAlpha = (s32)(blend * ((f32)current->blendAlpha - (f32)previousComponent) + (f32)previousComponent);
     } else {
         if (((SkyState*)gSkyState)->lights[slot].flags.unused80 != 0) {
             dir.x = (-1.0f);

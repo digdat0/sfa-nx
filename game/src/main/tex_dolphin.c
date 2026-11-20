@@ -1241,7 +1241,8 @@ void renderGlows(void)
                 skyGetSunColor(0, &amb[0], &amb[1], &amb[2]);
                 sunDot = (f32)(u32)sunAlpha * sunDot;
                 _gxSetTevColor2(amb[0], amb[1], amb[2], (int)(0.5f * sunDot));
-                alpha = 255.0f - 0.9f * sunDot;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                alpha = (s32)(255.0f - 0.9f * sunDot);
                 fade = 20000.0f * sunDot;
                 sunDot = fade * lbl_803DEC40;
                 GXBegin(GX_QUADS, GX_VTXFMT2, 4);

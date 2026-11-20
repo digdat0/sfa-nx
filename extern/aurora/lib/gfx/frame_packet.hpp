@@ -31,6 +31,8 @@ struct CustomDrawCommand {
 
 struct RenderPass;
 using DrawEncoder = void (*)(void* payload, const wgpu::RenderPassEncoder& pass, const RenderPass& passInfo);
+DrawEncoder gx_draw_encoder() noexcept;    // recording.cpp
+DrawEncoder clear_draw_encoder() noexcept;
 
 struct DrawCommand {
   DrawEncoder encoder = nullptr;

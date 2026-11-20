@@ -3,6 +3,7 @@
 #include "../internal.hpp"
 
 #include <cstring>
+#include <functional>
 
 namespace aurora::gx::fifo {
 
@@ -31,6 +32,12 @@ void shutdown();
 
 void begin_frame() noexcept;
 void end_frame() noexcept;
+
+// SFA-NX frame overlap: stop publishing at draws until the next begin_frame (end_frame without the
+// processor-side reset), then hand the frame to the FIFO thread. `work` runs on the FIFO thread once
+// every command before it is processed; returns once the previous frame's work has run.
+void set_frame_inactive() noexcept;
+void end_frame_async(std::function<void()> work);
 
 // Out-of-line slow path: grows internal buffer then appends data
 void write_data_grow(const void* data, uint32_t length);

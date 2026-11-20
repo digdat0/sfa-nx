@@ -380,7 +380,8 @@ void Shield_render(GameObject* obj, int fwdArg2, int fwdArg3, int fwdArg4, int f
                     {
                         obj->anim.rootMotionScale =
                             state->segmentScale[k] * savedScale * (state->fadeValue / state->fadeMax);
-                        obj->anim.renderAlpha = (u8)(state->segmentAlpha[k] * savedAlpha);
+                        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                        obj->anim.renderAlpha = (u8)(s32)(state->segmentAlpha[k] * savedAlpha);
                     }
                     model->bufferFlags &= ~0x8;
                     objRenderModelAndHitVolumes(obj, fwdArg2, fwdArg3, fwdArg4, fwdArg5, 1.0f);
@@ -395,7 +396,8 @@ void Shield_render(GameObject* obj, int fwdArg2, int fwdArg3, int fwdArg4, int f
                     state->segmentRotX[k] = (s16)(frameDelta * gShieldRotXRates[k] + (f32)state->segmentRotX[k]);
                     {
                         obj->anim.rootMotionScale = state->segmentScale[k] * savedScale;
-                        obj->anim.renderAlpha = (u8)(state->segmentAlpha[k] * savedAlpha);
+                        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                        obj->anim.renderAlpha = (u8)(s32)(state->segmentAlpha[k] * savedAlpha);
                     }
                     model->bufferFlags &= ~0x8;
                     objRenderModelAndHitVolumes(obj, fwdArg2, fwdArg3, fwdArg4, fwdArg5, 1.0f);
@@ -465,11 +467,14 @@ void Shield_update(GameObject* obj) {
         }
     }
     if (obj->anim.romDefNo == SHIELD_SEQID_OMNI_SHIELD) {
-        obj->anim.alpha = (u8)(state->fadeValue / state->fadeMax * (f32)(s32)randomGetRange(96, 127));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        obj->anim.alpha = (u8)(s32)(state->fadeValue / state->fadeMax * (f32)(s32)randomGetRange(96, 127));
     } else {
-        obj->anim.alpha = (u8)(state->fadeValue / state->fadeMax * (f32)(s32)randomGetRange(192, 255));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        obj->anim.alpha = (u8)(s32)(state->fadeValue / state->fadeMax * (f32)(s32)randomGetRange(192, 255));
     }
-    Sfx_SetObjectSfxVolume(obj, SFXTRIG_lockon3_on, (SHIELD_SFX_VOLUME_MAX * (state->fadeValue / state->fadeMax)),
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    Sfx_SetObjectSfxVolume(obj, SFXTRIG_lockon3_on, ((s32)(SHIELD_SFX_VOLUME_MAX * (state->fadeValue / state->fadeMax))),
                            SHIELD_SFX_VOLUME_SCALE);
     if (obj->anim.alpha != 0) {
         obj->anim.flags &= ~OBJANIM_FLAG_HIDDEN;

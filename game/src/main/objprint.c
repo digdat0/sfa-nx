@@ -116,11 +116,13 @@ void playerUpdateBlinkAnimation(GameObject* obj, void* blinkState, u16 flags) {
     f32 wave;
 
     objAnim = &obj->anim;
-    step = 3.0f * timeDelta;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    step = (s32)(3.0f * timeDelta);
     rightScale = (leftScale = 1.0f);
     switch (bs->mode) {
     case OBJLIB_BLINK_MODE_OPEN:
-        bs->timer = (u8)((f32)bs->timer + timeDelta);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        bs->timer = (u8)(s32)((f32)bs->timer + timeDelta);
         bs->amount = 0;
         if ((flags & 1) != 0) {
             if (randomGetRange(0, 100) == 1) {
@@ -144,7 +146,8 @@ void playerUpdateBlinkAnimation(GameObject* obj, void* blinkState, u16 flags) {
         }
         break;
     case OBJLIB_BLINK_MODE_CLOSING:
-        bs->timer = (u8)((f32)bs->timer + timeDelta);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        bs->timer = (u8)(s32)((f32)bs->timer + timeDelta);
         if ((s16)bs->amount + (s16)step > 255) {
             step = (u8)(255 - bs->amount);
             bs->mode = OBJLIB_BLINK_MODE_CLOSED;
@@ -152,7 +155,8 @@ void playerUpdateBlinkAnimation(GameObject* obj, void* blinkState, u16 flags) {
         bs->amount += step;
         break;
     case OBJLIB_BLINK_MODE_CLOSED:
-        bs->timer = (u8)((f32)bs->timer + timeDelta);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        bs->timer = (u8)(s32)((f32)bs->timer + timeDelta);
         if (randomGetRange(0, 100) == 1) {
             switch (bs->mode) {
             case OBJLIB_BLINK_MODE_CLOSING:
@@ -167,7 +171,8 @@ void playerUpdateBlinkAnimation(GameObject* obj, void* blinkState, u16 flags) {
         }
         break;
     case OBJLIB_BLINK_MODE_OPENING:
-        bs->timer = (u8)((f32)bs->timer + timeDelta);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        bs->timer = (u8)(s32)((f32)bs->timer + timeDelta);
         if ((s16)bs->amount - (s16)step < 0) {
             step = bs->amount;
             bs->mode = OBJLIB_BLINK_MODE_OPEN;
@@ -175,7 +180,8 @@ void playerUpdateBlinkAnimation(GameObject* obj, void* blinkState, u16 flags) {
         bs->amount -= step;
         break;
     case OBJLIB_BLINK_MODE_WINK_RIGHT:
-        bs->timer = (u8)(16.0f * timeDelta + bs->timer);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        bs->timer = (u8)(s32)(16.0f * timeDelta + bs->timer);
         bs->amount = 0xff;
         rightScale = 0.0f;
         if (randomGetRange(0, 25) == 1) {
@@ -192,7 +198,8 @@ void playerUpdateBlinkAnimation(GameObject* obj, void* blinkState, u16 flags) {
         }
         break;
     case OBJLIB_BLINK_MODE_WINK_LEFT:
-        bs->timer = (u8)(16.0f * timeDelta + bs->timer);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        bs->timer = (u8)(s32)(16.0f * timeDelta + bs->timer);
         bs->amount = 0xff;
         leftScale = 0.0f;
         if (randomGetRange(0, 25) == 1) {

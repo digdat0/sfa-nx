@@ -909,7 +909,8 @@ void setupHeatShimmerTevStages(char* p1)
     GXSetIndTexOrder(GX_INDTEXSTAGE1, GX_TEXCOORD2, GX_TEXMAP1);
     GXSetIndTexCoordScale(GX_INDTEXSTAGE1, GX_ITS_1, GX_ITS_1);
     GXSetTevIndirect(GX_TEVSTAGE2, GX_INDTEXSTAGE1, GX_ITF_8, GX_ITB_STU, GX_ITM_1, GX_ITW_OFF, GX_ITW_OFF, 1, 0, GX_ITBA_OFF);
-    gHeatEffectColor.r = 64.0f * f31v;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gHeatEffectColor.r = (s32)(64.0f * f31v);
     gHeatEffectColor.g = 0;
     gHeatEffectColor.b = 0;
     GXSetTevKColor(gRcpNextKColor, gHeatEffectColor);

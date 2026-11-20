@@ -3669,116 +3669,137 @@ void piRomLoadSection(int romOffset, int mapIndex, void* destBuf) {
     }
 }
 
-void tex1GetFrame(int texId, int unused, int* outA, int* outB, int count, int* frameTable, int queryMode) {
-    int idx = -1;
-    if (gResourceFileBuffers[0x20] != 0 || gResourceFileBuffers[0x4b] != 0) {
-        int s = OSDisableInterrupts();
-        int flags = gAssetLoadInFlightFlags;
-        uintptr_t f46c;
-        uintptr_t f518;
-        OSRestoreInterrupts(s);
-        f46c = gResourceFileBuffers[0x21];
-        f518 = gResourceFileBuffers[0x4c];
-        if ((texId & 0x80000000) != 0 && (flags & 0x2000) == 0) {
-            idx = 0x4b;
-        } else if ((texId & 0x40000000) != 0 && (flags & 0x1000) == 0) {
-            idx = 0x20;
-        } else if (f46c != 0 && (flags & 0x1000) == 0 && gResourceFileBuffers[0x20] != 0) {
-            idx = 0x20;
-        } else if (f518 != 0 && (flags & 0x2000) == 0 && gResourceFileBuffers[0x4b] != 0) {
-            idx = 0x4b;
-        }
-        {
-            uintptr_t base = gResourceFileBuffers[idx];
-            if (base != 0) {
-                if (queryMode == 1 && frameTable != 0) {
-                    uintptr_t e = (texId & 0xffffff) * 2 + frameTable[count];
-                    int v;
-                    e = base + e + 4;
-                    v = (int)fhSwap32(*(u32*)(e + 4));
-                    *outB = (int)fhSwap32(*(u32*)(e + 8));
-                    *outA = v;
-                } else if (queryMode == 2 && frameTable != 0) {
-                    memcpy(frameTable, (void*)(base + (texId & 0xffffff) * 2), (count + 1) * 4);
-                    fhSwapU32Array(frameTable, count + 1);
-                } else {
-                    uintptr_t e = base + (texId & 0xffffff) * 2;
-                    int v = (int)fhSwap32(*(u32*)(e + 0xc));
-                    *outA = (int)fhSwap32(*(u32*)(e + 8));
-                    if (strncmp(sDirBlockTag, (char*)e, 3) == 0) {
-                        *outB = 0xffffffff;
-                    } else {
-                        *outB = v;
-                    }
-                }
+// SFA-NX: tex0GetFrame and tex1GetFrame were rewritten around these helpers. The originals read texture
+// frame headers straight out of a resource file buffer without checking the bank index or the offset;
+// during the shader tour's warps a bank could be unloaded, and the code read gResourceFileBuffers[-1]
+// (crash 2127). The result is the same when the data is there; otherwise the outputs are 0.
+//
+// True when a 16-byte frame header at `off` lies inside resource file `idx` (size 0 = unknown, allowed).
+static int texFrameFits(int idx, uintptr_t off) {
+    u32 size = gResourceFileSizes[idx];
+    return size == 0 || off + 0x10 <= size;
+}
+
+// One frame lookup in bank `idx`. A negative idx (~idx) means the bank is not loaded: the header is then
+// read from the file on disc, as the original's fallback did. queryMode 1 reads one frame's two values,
+// 2 copies the frame table, anything else reads the texture's first header (checkDir: a directory block
+// gives outB = -1, as tex1GetFrame did).
+static void texGetFrameFrom(int idx, int checkDir, int texId, int* outA, int* outB, int count, int* frameTable, int queryMode) {
+    uintptr_t base = 0;
+    if (idx < 0) {
+        idx = ~idx;
+    } else {
+        base = gResourceFileBuffers[idx];
+    }
+    uintptr_t off = (uintptr_t)(texId & 0xffffff) * 2;
+    if (base != 0) {
+        if (queryMode == 1 && frameTable != 0) {
+            uintptr_t e = off + (u32)frameTable[count] + 4;
+            if (!texFrameFits(idx, e)) {
+                *outA = 0;
+                *outB = 0;
+                return;
+            }
+            e += base;
+            *outA = (int)fhSwap32(*(u32*)(e + 4));
+            *outB = (int)fhSwap32(*(u32*)(e + 8));
+        } else if (queryMode == 2 && frameTable != 0) {
+            if (!texFrameFits(idx, off + (count + 1) * 4)) {
+                memset(frameTable, 0, (count + 1) * 4);
+                return;
+            }
+            memcpy(frameTable, (void*)(base + off), (count + 1) * 4);
+            fhSwapU32Array(frameTable, count + 1);
+        } else {
+            uintptr_t e;
+            if (!texFrameFits(idx, off)) {
+                *outA = 0;
+                *outB = 0;
+                return;
+            }
+            e = base + off;
+            *outA = (int)fhSwap32(*(u32*)(e + 8));
+            if (checkDir && strncmp(sDirBlockTag, (char*)e, 3) == 0) {
+                *outB = 0xffffffff;
             } else {
-                DVDFileInfo fileInfo;
-                int v;
-                char* buf;
-                DVDOpen(sResourceFileNameTable[idx], &fileInfo);
-                buf = mmAlloc(0x400, 0x7f7f7fff, 0);
-                DVDRead(&fileInfo, buf, 0x400, (texId & 0xffffff) * 2);
-                DVDClose(&fileInfo);
-                DCStoreRange(buf, 0x400);
-                if (queryMode == 1 && frameTable != 0) {
-                    uintptr_t e = frameTable[count];
-                    int v;
-                    e = (uintptr_t)buf + e + 4;
-                    v = (int)fhSwap32(*(u32*)(e + 4));
-                    *outB = (int)fhSwap32(*(u32*)(e + 8));
-                    *outA = v;
-                } else if (queryMode == 2 && frameTable != 0) {
-                    memcpy(frameTable, buf, (count + 1) * 4);
-                    fhSwapU32Array(frameTable, count + 1);
-                } else {
-                    v = (int)fhSwap32(*(u32*)(buf + 0xc));
-                    *outA = (int)fhSwap32(*(u32*)(buf + 8));
-                    if (strncmp(sDirBlockTag, buf, 3) == 0) {
-                        *outB = 0xffffffff;
-                    } else {
-                        *outB = v;
-                    }
-                }
-                mm_free(buf);
+                *outB = (int)fhSwap32(*(u32*)(e + 0xc));
             }
         }
+    } else {
+        DVDFileInfo fileInfo;
+        char* buf;
+        if (!DVDOpen(sResourceFileNameTable[idx], &fileInfo)) {
+            *outA = 0;
+            *outB = 0;
+            return;
+        }
+        buf = mmAlloc(0x400, 0x7f7f7fff, 0);
+        if (buf == NULL) {
+            DVDClose(&fileInfo);
+            *outA = 0;
+            *outB = 0;
+            return;
+        }
+        DVDRead(&fileInfo, buf, 0x400, (int)off);
+        DVDClose(&fileInfo);
+        DCStoreRange(buf, 0x400);
+        if (queryMode == 1 && frameTable != 0) {
+            u32 e = (u32)frameTable[count] + 4;
+            if (e + 0xc <= 0x400) {
+                *outA = (int)fhSwap32(*(u32*)(buf + e + 4));
+                *outB = (int)fhSwap32(*(u32*)(buf + e + 8));
+            } else {
+                *outA = 0;
+                *outB = 0;
+            }
+        } else if (queryMode == 2 && frameTable != 0) {
+            memcpy(frameTable, buf, (count + 1) * 4);
+            fhSwapU32Array(frameTable, count + 1);
+        } else {
+            *outA = (int)fhSwap32(*(u32*)(buf + 8));
+            if (checkDir && strncmp(sDirBlockTag, buf, 3) == 0) {
+                *outB = 0xffffffff;
+            } else {
+                *outB = (int)fhSwap32(*(u32*)(buf + 0xc));
+            }
+        }
+        mm_free(buf);
+    }
+}
+
+// Chooses between the two banks a texture can live in, by the texture id's bank bits and by which banks are
+// loaded and not being reloaded (gAssetLoadInFlightFlags); returns ~bank when neither is usable.
+static int texPickBank(int texId, int binA, int binB, int flagA, int flagB) {
+    int s = OSDisableInterrupts();
+    int flags = gAssetLoadInFlightFlags;
+    OSRestoreInterrupts(s);
+    if ((texId & 0x80000000) != 0 && (flags & flagB) == 0) {
+        return binB;
+    }
+    if ((texId & 0x40000000) != 0 && (flags & flagA) == 0) {
+        return binA;
+    }
+    if (gResourceFileBuffers[binA + 1] != 0 && (flags & flagA) == 0 && gResourceFileBuffers[binA] != 0) {
+        return binA;
+    }
+    if (gResourceFileBuffers[binB + 1] != 0 && (flags & flagB) == 0 && gResourceFileBuffers[binB] != 0) {
+        return binB;
+    }
+    return ~((texId & 0x80000000) != 0 ? binB : binA);
+}
+
+// The two public lookups: tex1 uses banks 0x20/0x4b, tex0 banks 0x23/0x4d (same bank flags as before).
+void tex1GetFrame(int texId, int unused, int* outA, int* outB, int count, int* frameTable, int queryMode) {
+    if (gResourceFileBuffers[0x20] != 0 || gResourceFileBuffers[0x4b] != 0) {
+        texGetFrameFrom(texPickBank(texId, 0x20, 0x4b, 0x1000, 0x2000), 1, texId, outA, outB, count, frameTable,
+                        queryMode);
     }
 }
 
 void tex0GetFrame(int texId, int unused, int* outA, int* outB, int count, int* frameTable, int queryMode) {
-    int idx = -1;
     if (gResourceFileBuffers[0x23] != 0 || gResourceFileBuffers[0x4d] != 0) {
-        int s = OSDisableInterrupts();
-        int flags = gAssetLoadInFlightFlags;
-        uintptr_t f478;
-        uintptr_t f520;
-        OSRestoreInterrupts(s);
-        f478 = gResourceFileBuffers[0x24];
-        f520 = gResourceFileBuffers[0x4e];
-        if ((texId & 0x80000000) != 0 && (flags & 0x200) == 0) {
-            idx = 0x4d;
-        } else if ((texId & 0x40000000) != 0 && (flags & 0x100) == 0) {
-            idx = 0x23;
-        } else if (f478 != 0 && (flags & 0x100) == 0) {
-            idx = 0x23;
-        } else if (f520 != 0 && (flags & 0x200) == 0) {
-            idx = 0x4d;
-        }
-        if (queryMode == 1 && frameTable != 0) {
-            uintptr_t base = gResourceFileBuffers[idx];
-            uintptr_t e = base + (texId & 0xffffff) * 2 + frameTable[count] + 4;
-            int v = (int)fhSwap32(*(u32*)(e + 8));
-            *outA = (int)fhSwap32(*(u32*)(e + 4));
-            *outB = v;
-        } else if (queryMode == 2 && frameTable != 0) {
-            memcpy(frameTable, (void*)(gResourceFileBuffers[idx] + (texId & 0xffffff) * 2), (count + 1) * 4);
-            fhSwapU32Array(frameTable, count + 1);
-        } else {
-            uintptr_t e = gResourceFileBuffers[idx] + (texId & 0xffffff) * 2 + 4;
-            int v = (int)fhSwap32(*(u32*)(e + 8));
-            *outA = (int)fhSwap32(*(u32*)(e + 4));
-            *outB = v;
-        }
+        texGetFrameFrom(texPickBank(texId, 0x23, 0x4d, 0x100, 0x200), 0, texId, outA, outB, count, frameTable,
+                        queryMode);
     }
 }
 

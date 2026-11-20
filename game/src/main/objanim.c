@@ -374,7 +374,8 @@ Object_ObjAnimSetMove(void* objAnimHandle, int moveId, f32 moveProgress, u8 move
     {
         state->savedFrameStep = state->frameStep;
         eventCountdownStep = 16384.0f / (float)frameStep;
-        state->eventStep = eventCountdownStep;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        state->eventStep = (s32)(eventCountdownStep);
         state->eventCountdown = OBJANIM_EVENT_COUNTDOWN_RESET;
     }
     state->frameStep = 0.0f;
@@ -421,7 +422,8 @@ void ObjAnim_SetCurrentEventStepFrames(ObjAnimComponent* objAnim, u32 frameCount
     if (model != NULL)
     {
         eventCountdownStep = 16384.0f / (float)(s32)frameCount;
-        model->animStateA->eventStep = eventCountdownStep;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        model->animStateA->eventStep = (s32)(eventCountdownStep);
     }
 }
 
@@ -1128,7 +1130,8 @@ int ObjAnim_SetCurrentMove(void* objAnimHandle, int moveId, f32 moveProgress, u8
     {
         state->savedFrameStep = state->frameStep;
         eventCountdownStep = 16384.0f / (float)frameStep;
-        state->eventStep = eventCountdownStep;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        state->eventStep = (s32)(eventCountdownStep);
         state->eventCountdown = OBJANIM_EVENT_COUNTDOWN_RESET;
     }
     else

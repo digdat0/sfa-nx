@@ -53,6 +53,9 @@
 #include "main/vecmath.h"
 #include "dolphin/pad.h"
 #include "main/voxmaps.h"
+#ifdef __SWITCH__
+int sfaSwitchInvertLook(void);
+#endif
 
 void* gDRCloudRunnerStateHandlers[8];
 void* gDRCloudRunnerDefaultStateHandler;
@@ -981,6 +984,12 @@ void DR_CloudRunner_updateFlightControl(GameObject* obj, f32 f, int triggerFrame
     if (inner->mountState == VEHICLE_Mounted) {
         inner->baddie.moveInputX = (f32)padGetStickX(0);
         inner->baddie.moveInputZ = (f32)padGetStickY(0);
+#ifdef __SWITCH__
+        // SFA-NX: the - menu's Invert look flips the vertical steering in the cloud run.
+        if (sfaSwitchInvertLook()) {
+            inner->baddie.moveInputZ = -inner->baddie.moveInputZ;
+        }
+#endif
         inner->baddie.pressedButtons = getButtonsJustPressed(0);
         inner->baddie.heldButtons = getButtonsHeld(0);
         inner->baddie.cameraYaw = slot->yaw;

@@ -248,7 +248,8 @@ int kaldachom_stateHandlerA07(GameObject* obj, GroundBaddieState* state) {
             control->soundFlags |= KALDACHOM_SOUND_FLAG_DOOR_CREAK;
         }
     }
-    obj->anim.alpha = (1.0f - obj->anim.currentMoveProgress) * 255.0f;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->anim.alpha = (s32)((1.0f - obj->anim.currentMoveProgress) * 255.0f);
     return 0;
 }
 

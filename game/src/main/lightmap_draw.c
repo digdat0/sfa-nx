@@ -113,6 +113,15 @@ int setWidescreen(u8 v)
     {
         v = (u8)fhConfigScreenStyleIsWide();
     }
+#ifdef __SWITCH__
+    else
+    {
+        // The output frame's shape is otherwise fixed at boot (FOXHOLLOW_SCREEN_STYLE, 4:3 when unset), so
+        // the in-game option only squeezed a 16:9 camera into a 4:3 box. Follow the option instead.
+        extern void AuroraSetDisplayAspect(f32 aspect);
+        AuroraSetDisplayAspect(v != 0 ? 16.0f / 9.0f : 4.0f / 3.0f);
+    }
+#endif
 
     if (v != 0)
     {

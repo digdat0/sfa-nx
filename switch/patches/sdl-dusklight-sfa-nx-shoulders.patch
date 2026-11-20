@@ -1,0 +1,28 @@
+SFA-NX (applied once to ref/SDL-dusklight, see switch/README.md): L/R are reported as the shoulder buttons
+and ZL/ZR as the analog triggers, so the default mapping matches the GameCube layout.
+
+--- a/src/joystick/switch/SDL_sysjoystick.c
++++ b/src/joystick/switch/SDL_sysjoystick.c
+@@ -279,9 +279,9 @@
+ 
+     const bool has_gc_triggers = (padGetStyleSet(pad) & HidNpadStyleTag_NpadGc) != 0;
+     const int trigger_l = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 0) * 2 - 32768)
+-                                          : ((held & HidNpadButton_L) ? 32767 : -32768);
++                                          : ((held & HidNpadButton_ZL) ? 32767 : -32768);
+     const int trigger_r = has_gc_triggers ? ((int)padGetGcTriggerPos(pad, 1) * 2 - 32768)
+-                                          : ((held & HidNpadButton_R) ? 32767 : -32768);
++                                          : ((held & HidNpadButton_ZR) ? 32767 : -32768);
+     SDL_SendJoystickAxis(timestamp, joystick, 4, clamp_axis(trigger_l));
+     SDL_SendJoystickAxis(timestamp, joystick, 5, clamp_axis(trigger_r));
+ }
+@@ -302,8 +302,8 @@
+     out->b = (SDL_InputMapping){ EMappingKind_Button, 1 };
+     out->x = (SDL_InputMapping){ EMappingKind_Button, 2 };
+     out->y = (SDL_InputMapping){ EMappingKind_Button, 3 };
+-    out->leftshoulder = (SDL_InputMapping){ EMappingKind_Button, 6 };
+-    out->rightshoulder = (SDL_InputMapping){ EMappingKind_Button, 7 };
++    out->leftshoulder = (SDL_InputMapping){ EMappingKind_Button, 4 };
++    out->rightshoulder = (SDL_InputMapping){ EMappingKind_Button, 5 };
+     out->lefttrigger = (SDL_InputMapping){ EMappingKind_Axis, 4 };
+     out->righttrigger = (SDL_InputMapping){ EMappingKind_Axis, 5 };
+     out->back = (SDL_InputMapping){ EMappingKind_Button, 8 };

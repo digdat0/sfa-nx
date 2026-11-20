@@ -56,7 +56,8 @@ void cfmagicwall_update(GameObject* obj) {
         fadeDistance = playerDistance;
     }
 
-    obj->anim.alpha = fadeDistance < range ? 255.0f * (fadeDistance / range) : 255.0f;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->anim.alpha = (s32)(fadeDistance < range ? 255.0f * (fadeDistance / range) : 255.0f);
 }
 
 void cfmagicwall_init(GameObject* obj, CfMagicWallPlacement* placement) {

@@ -272,7 +272,8 @@ void wcpushblock_update(GameObject* obj) {
                 sfxVolume = gWcPushBlockSlideSfxMaxVolume;
             }
             Sfx_KeepAliveLoopedObjectSound(obj, SFXTRIG_en_treedrum16_c8);
-            Sfx_SetObjectSfxVolume(obj, SFXTRIG_en_treedrum16_c8, sfxVolume, lbl_803E6D78);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            Sfx_SetObjectSfxVolume(obj, SFXTRIG_en_treedrum16_c8, (s32)(sfxVolume), lbl_803E6D78);
             WCPUSHBLOCK_FLAGS(state).sfxActive = 1;
         }
     }
@@ -445,7 +446,8 @@ void wcpushblock_update(GameObject* obj) {
         break;
     }
 
-    WCPUSHBLOCK_BOB_ANGLE(state) = gWcPushBlockBobAngleSpeed * timeDelta + (f32)(u32)WCPUSHBLOCK_BOB_ANGLE(state);
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    WCPUSHBLOCK_BOB_ANGLE(state) = (s32)(gWcPushBlockBobAngleSpeed * timeDelta + (f32)(u32)WCPUSHBLOCK_BOB_ANGLE(state));
     WCPUSHBLOCK_BOB_Y(state) =
         gWcPushBlockBobAmplitude *
         mathSinf(gWcPushBlockPi * (f32)(u32)WCPUSHBLOCK_BOB_ANGLE(state) / gWcPushBlockAngleScale);

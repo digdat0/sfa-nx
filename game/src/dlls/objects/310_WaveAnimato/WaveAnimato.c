@@ -115,9 +115,10 @@ static void WaveAnimator_buildSharedTables(WaveAnimatorState* config) {
                 f32 v = *(f32*)((u8*)gWaveAnimatorHeightTable + heightCursor[0]);
                 if (v < colorSplitZero) {
                     t = (v - config->minHeight) / negMin;
-                    ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->red = 65.0f * t + 190.0f;
-                    ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->green = 165.0f * t + 90.0f;
-                    ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->blue = 235.0f * t + 20.0f;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->red = (s32)(65.0f * t + 190.0f);
+                    ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->green = (s32)(165.0f * t + 90.0f);
+                    ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->blue = (s32)(235.0f * t + 20.0f);
                 } else {
                     ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->red = 255;
                     ((WaveAnimatorColor*)((u8*)gWaveAnimatorColorTable + colorCursor[0]))->green = 255;

@@ -59,9 +59,10 @@ void CameraModeClimb_update(CameraObject* camera) {
         }
         blend = (f32)(s32)(gCameraModeClimbState->transitionDuration - gCameraModeClimbState->transitionTimer) /
                 (f32)(s32)gCameraModeClimbState->transitionDuration;
-        gCameraModeClimbState->relativePosition = blend * (f32)(s32)(gCameraModeClimbState->targetRelativePosition -
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gCameraModeClimbState->relativePosition = (s32)(blend * (f32)(s32)(gCameraModeClimbState->targetRelativePosition -
                                                                      gCameraModeClimbState->startRelativePosition) +
-                                                  (f32)(u32)gCameraModeClimbState->startRelativePosition;
+                                                  (f32)(u32)gCameraModeClimbState->startRelativePosition);
         gCameraModeClimbState->targetDistance =
             blend * (gCameraModeClimbState->endDistance - gCameraModeClimbState->startDistance) +
             gCameraModeClimbState->startDistance;
@@ -169,7 +170,8 @@ void CameraModeClimb_init(CameraObject* camera, int mode, CameraModeClimbTransit
         (*gCameraInterface)
             ->getRelativePosition(camera, &outX, &outY, &outZ, &defaultDistXZ,
                                   (f32)(u16)gCameraModeClimbState->relativePosition, 0);
-        gCameraModeClimbState->startRelativePosition = defaultRelPos;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        gCameraModeClimbState->startRelativePosition = (s32)(defaultRelPos);
         gCameraModeClimbState->startMinHeight = defaultMinHeight;
         gCameraModeClimbState->startMaxHeight = defaultMaxHeight;
         gCameraModeClimbState->startDistance = defaultDistXZ;

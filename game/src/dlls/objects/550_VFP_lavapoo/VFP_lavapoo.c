@@ -99,7 +99,8 @@ void VFP_lavapool_updateWave(GameObject* obj)
     {
         speed = 255.0f * (phase / 2000.0f);
     }
-    obj->anim.alpha = ((speed < 0.0f) ? 0.0f : ((speed > 255.0f) ? 255.0f : speed));
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->anim.alpha = (s32)(((speed < 0.0f) ? 0.0f : ((speed > 255.0f) ? 255.0f : speed)));
     tex = objFindTexture(obj, 0, 0);
     if (tex != NULL)
     {

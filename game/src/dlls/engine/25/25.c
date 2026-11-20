@@ -973,7 +973,8 @@ void dll_19_getTargetGeometry(GameObject* obj, GameObject* target, int div, u16*
             st->flags400 |= DLL19_FLAG_YAW_ALIGNED;
         }
         *outYaw = (u16)delta / (0x10000 / (u8)div);
-        *outDist = sqrtf(dp[2] * dp[2] + (dp[0] * dp[0] + dp[1] * dp[1]));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        *outDist = (s32)(sqrtf(dp[2] * dp[2] + (dp[0] * dp[0] + dp[1] * dp[1])));
     }
 }
 

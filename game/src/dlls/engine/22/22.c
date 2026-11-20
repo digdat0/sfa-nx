@@ -33,7 +33,8 @@ static inline void screenTransitionFadeBlack(void) {
     col.b = 0;
     col.g = 0;
     col.r = 0;
-    col.a = screenTransitionAlpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    col.a = (s32)(screenTransitionAlpha);
     hudDrawRect(sx, sy, sw, sh, col);
     GXSetScissor(sx, sy, sw, sh);
 }
@@ -49,7 +50,8 @@ static inline void screenTransitionFadeColor(u8 r, u8 g, u8 b) {
     col.r = r;
     col.g = g;
     col.b = b;
-    col.a = screenTransitionAlpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    col.a = (s32)(screenTransitionAlpha);
     hudDrawRect(sx, sy, sw, sh, col);
     GXSetScissor(sx, sy, sw, sh);
 }
@@ -105,7 +107,8 @@ void screenTransition_drawWhiteWipe(int p1, int p2, int p3, u8 r, u8 g, u8 b) {
         maxAlpha = 0xff;
         wipe = (int)(screenTransitionAlpha - SCREEN_TRANSITION_ALPHA_MIDPOINT);
     } else {
-        maxAlpha = SCREEN_TRANSITION_ALPHA_SCALE * screenTransitionAlpha;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        maxAlpha = (s32)(SCREEN_TRANSITION_ALPHA_SCALE * screenTransitionAlpha);
         wipe = 0;
     }
     half = (u16)(width >> 1);

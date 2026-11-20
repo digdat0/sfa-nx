@@ -71,6 +71,9 @@
 #include "main/map_load.h"
 #include "main/rcp_dolphin.h"
 #include "main/pi_dolphin.h"
+#ifdef __SWITCH__
+int sfaSwitchInvertLook(void);
+#endif
 
 GameObject* gArwing;
 
@@ -147,6 +150,12 @@ void arwarwing_readControls(GameObject* obj, ArwingState* state) {
     debugPrintSetColor(0xff, 0xff, 0xff, 0xff);
     aw->stickX = (f32)padGetStickX(0) / 72.0f;
     aw->stickY = (f32)padGetStickY(0) / 72.0f;
+#ifdef __SWITCH__
+    // SFA-NX: the - menu's Invert look flips the Arwing's pitch input.
+    if (sfaSwitchInvertLook()) {
+        aw->stickY = -aw->stickY;
+    }
+#endif
     if (aw->damageFlashTimer > 0.0f) {
         f32 zero = 0.0f;
         knockX = -aw->knockVelX;
@@ -453,9 +462,10 @@ void arwarwing_updateFlightPhysics(GameObject* obj, ArwingState* state) {
     obj->anim.localPosY =
         arwing->bobBlend * (arwing->bobYAmp * mathSinf(3.1415927f * (f32)(u32)arwing->bobYPhase / 32768.0f)) +
         obj->anim.localPosY;
-    arwing->bobRotZPhase = arwing->bobRotZRate * timeDelta + (f32)(u32)arwing->bobRotZPhase;
-    arwing->bobXPhase = arwing->bobXRate * timeDelta + (f32)(u32)arwing->bobXPhase;
-    arwing->bobYPhase = arwing->bobYRate * timeDelta + (f32)(u32)arwing->bobYPhase;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    arwing->bobRotZPhase = (s32)(arwing->bobRotZRate * timeDelta + (f32)(u32)arwing->bobRotZPhase);
+    arwing->bobXPhase = (s32)(arwing->bobXRate * timeDelta + (f32)(u32)arwing->bobXPhase);
+    arwing->bobYPhase = (s32)(arwing->bobYRate * timeDelta + (f32)(u32)arwing->bobYPhase);
     arwarwing_clampToFlightBounds(obj, state);
 }
 
@@ -1516,9 +1526,11 @@ void arwarwing_update(GameObject* obj) {
             if (throttle > lbl_803E7000) {
                 throttle = lbl_803E7000;
             }
-            state->thrusterL->anim.alpha = throttle;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->thrusterL->anim.alpha = (s32)(throttle);
             state->thrusterR->anim.flags &= ~OBJANIM_FLAG_HIDDEN;
-            state->thrusterR->anim.alpha = throttle;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->thrusterR->anim.alpha = (s32)(throttle);
         }
         state->velTargetX = -state->stickX * state->maxSpeedX;
         state->velTargetY = -state->stickY * state->maxSpeedY;

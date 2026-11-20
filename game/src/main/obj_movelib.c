@@ -83,7 +83,8 @@ int Obj_UpdateLightningCluster(GameObject* obj, LightningEffect** entries, int c
             pos[2] += 0.001f * (intensity * (f32)(int)(randomGetRange(0, 0x7d0) - 0x3e8));
             entries[i] =
                 lightningCreate((const Vec3f*)&obj->anim.localPosX, (const Vec3f*)pos, gObjLightningClusterRadiusX,
-                                           gObjLightningClusterRadiusY, gObjLightningClusterLifetime, gObjLightningClusterWidth, 0);
+                                           // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                                           gObjLightningClusterRadiusY, (s32)(gObjLightningClusterLifetime), gObjLightningClusterWidth, 0);
             spawned = 1;
         }
     }

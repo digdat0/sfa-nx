@@ -97,6 +97,12 @@ BindGroupRef bind_group_ref(const WGPUBindGroupDescriptor& descriptor) {
   return id;
 }
 
+WGPUBindGroup find_bind_group_raw(BindGroupRef id) {
+  std::lock_guard lock{g_bindGroupCacheMutex};
+  const auto it = g_cachedBindGroups.find(id);
+  return it == g_cachedBindGroups.end() ? nullptr : it->second.bindGroup.Get();
+}
+
 wgpu::BindGroup find_bind_group(BindGroupRef id) {
   std::lock_guard lock{g_bindGroupCacheMutex};
   const auto it = g_cachedBindGroups.find(id);

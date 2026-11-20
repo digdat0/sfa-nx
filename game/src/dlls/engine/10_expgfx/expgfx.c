@@ -1,3 +1,7 @@
+// SFA-NX: stdio for the particle diagnostic further down (printf of oversized quads).
+#ifdef __SWITCH__
+#include <stdio.h>
+#endif
 #include "dlls/objects/458_DIMExplosio.h"
 #include "main/dll/partfx_interface.h"
 #include "dolphin/mtx.h"
@@ -2320,11 +2324,13 @@ void expgfx_initSlotQuad(void* slotPtr)
 
     if ((slot->behaviorFlags & EXPGFX_BEHAVIOR_SCALE_FROM_ZERO) != 0)
     {
-        slot->scaleCurrent = (f32)slot->scaleStep * step + (f32)slot->scaleCurrent;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        slot->scaleCurrent = (s32)((f32)slot->scaleStep * step + (f32)slot->scaleCurrent);
     }
     else if ((slot->renderFlags & EXPGFX_RENDER_SCALE_OVER_LIFETIME) != 0)
     {
-        slot->scaleCurrent = (f32)slot->scaleCurrent - (f32)slot->scaleStep * step;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        slot->scaleCurrent = (s32)((f32)slot->scaleCurrent - (f32)slot->scaleStep * step);
     }
 
     if (resource == 0)
@@ -2442,8 +2448,9 @@ void expgfx_updateActivePools(u8 sourceMode, uintptr_t sourceId, int resetSource
     player = Obj_GetPlayerObject();
     tricky = getTrickyObject();
     cache = getCache();
-    gExpgfxPhaseAngleA += (u16)(120.0f * timeDelta);
-    gExpgfxPhaseAngleB += (u16)(480.0f * timeDelta);
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gExpgfxPhaseAngleA += (u16)(s32)(120.0f * timeDelta);
+    gExpgfxPhaseAngleB += (u16)(s32)(480.0f * timeDelta);
     sky = skyGetCurrentLightIndex();
     skyGetSunLightDirection(sky, &skyLightDir[0], &skyLightDir[1], &skyLightDir[2]);
     PSMTXMultVec((void*)Camera_GetViewRotationMatrix(), (void*)skyLightDir, (void*)skyLightDir);
@@ -2453,9 +2460,10 @@ void expgfx_updateActivePools(u8 sourceMode, uintptr_t sourceId, int resetSource
         ambientScale = 0.75f;
     }
     skyGetSunColor(sky, &ambR8, &ambG8, &ambB8);
-    ambientScaled[2] = (f32)ambR8 * ambientScale;
-    ambientScaled[1] = (f32)ambG8 * ambientScale;
-    ambientScaled[0] = (f32)ambB8 * ambientScale;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    ambientScaled[2] = (s32)((f32)ambR8 * ambientScale);
+    ambientScaled[1] = (s32)((f32)ambG8 * ambientScale);
+    ambientScaled[0] = (s32)((f32)ambB8 * ambientScale);
 
     activeCountScan = runtime->poolActiveCounts;
     for (scanIdx = 0; scanIdx < EXPGFX_POOL_COUNT || (scanIdx = -1, 0); scanIdx++)
@@ -2552,6 +2560,14 @@ void expgfx_updateActivePools(u8 sourceMode, uintptr_t sourceId, int resetSource
                     ((u32)slot->encodedTableIndex >> 1) & EXPGFX_SLOT_TABLE_INDEX_MASK);
                 srcObj = (ObjAnimComponent*)entry->sourceId;
                 poolOrResource = (intptr_t)entry->resource;
+#ifdef __SWITCH__
+                // The stretched-trail quad below spans posX - trailPrevX. trailPrev is only recorded on the
+                // free-motion path, so attract-mode trails read it uninitialised (or left from another slot);
+                // GCC's stack garbage there drew screen-sized fire streaks. Start each slot at its own position.
+                trailPrevX = slot->posX.value;
+                trailPrevY = slot->posY.value;
+                trailPrevZ = slot->posZ.value;
+#endif
                 Expgfx_SetSlotFrameParity(slot, 0);
                 Expgfx_SetSlotQuadReady(slot, 1);
                 if ((slot->behaviorFlags & EXPGFX_BEHAVIOR_HOLD_LIFETIME_TIMER) == 0)
@@ -2921,7 +2937,8 @@ void expgfx_updateActivePools(u8 sourceMode, uintptr_t sourceId, int resetSource
                     slot->posZ.value += slot->velocityZ * timeDelta;
                     if ((slot->behaviorFlags & EXPGFX_BEHAVIOR_SCALE_FROM_ZERO) != 0)
                     {
-                        slot->scaleCurrent = (f32)slot->scaleStep * timeDelta + (f32)slot->scaleCurrent;
+                        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                        slot->scaleCurrent = (s32)((f32)slot->scaleStep * timeDelta + (f32)slot->scaleCurrent);
                     }
                     else if ((slot->renderFlags & EXPGFX_RENDER_SCALE_OVER_LIFETIME) != 0)
                     {
@@ -3737,6 +3754,37 @@ void drawGlow(uintptr_t slotPoolBase, int poolIndex)
                 {
                     scaleFactor = scaleSize;
                 }
+#ifdef __SWITCH__
+                {
+                    // Diagnostic (starburst fire): log particle quads whose corners reach far from the centre.
+                    static int sBigQuadLogs;
+                    static int sQuadSamples;
+                    ExpgfxQuadVertex* dq = (ExpgfxQuadVertex*)slot;
+                    f32 ext = 0.0f;
+                    int dv;
+                    for (dv = 0; dv < 4; dv++)
+                    {
+                        f32 ax = __fabsf((f32)dq[dv].x), ay = __fabsf((f32)dq[dv].y), az = __fabsf((f32)dq[dv].z);
+                        if (ax > ext) ext = ax;
+                        if (ay > ext) ext = ay;
+                        if (az > ext) ext = az;
+                    }
+                    sQuadSamples++;
+                    // The quad templates span +-1000; corners beyond that come from stretched trails or bad data.
+                    if ((ext > 1100.0f && sBigQuadLogs < 300) || (sQuadSamples % 2000) == 0)
+                    {
+                        if (ext > 1100.0f) sBigQuadLogs++;
+                        ext *= scaleFactor;
+                        printf("[expgfx] ext %.1f pool %d slot %d beh %08X ren %08X sc %u/%u/%u life %d/%d tex %p "
+                               "v (%d %d %d) (%d %d %d) (%d %d %d) (%d %d %d) sf %.4f td %.2f\n",
+                               ext, poolIndex, slotIndex, (unsigned)slot->behaviorFlags, (unsigned)slot->renderFlags,
+                               slot->scaleCurrent, slot->scaleTarget, slot->scaleStep, slot->lifetimeFrame,
+                               slot->lifetimeFrameLimit, (void*)texture, dq[0].x, dq[0].y, dq[0].z, dq[1].x,
+                               dq[1].y, dq[1].z, dq[2].x, dq[2].y, dq[2].z, dq[3].x, dq[3].y, dq[3].z, scaleFactor,
+                               timeDelta);
+                    }
+                }
+#endif
 
                 {
                     u32 behavior = slot->behaviorFlags;
@@ -4406,18 +4454,21 @@ int expgfx_addremove(ExpgfxSpawnConfig* config, int preferredPoolIndex, int slot
         if ((slot->behaviorFlags & EXPGFX_BEHAVIOR_SCALE_FROM_ZERO) != 0)
         {
             slot->scaleCurrent = 0;
-            slot->scaleStep = (scaleVal / (f32)(s32)slot->lifetimeFrameLimit);
-            slot->scaleTarget = scaleVal;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            slot->scaleStep = (s32)((scaleVal / (f32)(s32)slot->lifetimeFrameLimit));
+            slot->scaleTarget = (s32)(scaleVal);
         }
         else if ((slot->renderFlags & EXPGFX_RENDER_SCALE_OVER_LIFETIME) != 0)
         {
-            slot->scaleCurrent = scaleVal;
-            slot->scaleStep = (scaleVal / (f32)(s32)slot->lifetimeFrameLimit);
-            slot->scaleTarget = scaleVal;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            slot->scaleCurrent = (s32)(scaleVal);
+            slot->scaleStep = (s32)((scaleVal / (f32)(s32)slot->lifetimeFrameLimit));
+            slot->scaleTarget = (s32)(scaleVal);
         }
         else
         {
-            slot->scaleCurrent = scaleVal;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            slot->scaleCurrent = (s32)(scaleVal);
             slot->scaleTarget = slot->scaleCurrent;
             slot->scaleStep = 0;
         }

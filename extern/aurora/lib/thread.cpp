@@ -1,5 +1,9 @@
 #include "thread.hpp"
 
+#if defined(__SWITCH__)
+extern "C" void melee_nx_perf_thread(const char* name); // switch/src/perf_switch.cpp
+#endif
+
 #include <SDL3/SDL_thread.h>
 #include <tracy/Tracy.hpp>
 
@@ -293,6 +297,12 @@ void set_current(const Options& options) noexcept {
   if (options.affinity == Affinity::SharedCache) {
     pin_shared_cache();
   }
+#if defined(__SWITCH__)
+  // Horizon starts every thread on the process's default core, so without this the game thread, the FIFO
+  // processor and the render worker all share core 0. switch/src/perf_switch.cpp places them by name
+  // and registers them with the sampling profiler.
+  melee_nx_perf_thread(options.name.c_str());
+#endif
 }
 
 } // namespace aurora::thread

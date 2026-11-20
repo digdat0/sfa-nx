@@ -170,7 +170,8 @@ void CameraModeNormal_updateTargetAction(CameraObject* camera, GameObject* targe
                    (cond = playerIsInNormalControl(target), cond != 0)) {
             viewfinderSettings.radius = gCameraModeNormalState->minDistance;
             viewfinderSettings.yOffset = gCameraModeNormalState->lowerHeightOffset;
-            viewfinderSettings.height = gCameraModeNormalState->targetHeight;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            viewfinderSettings.height = (s32)(gCameraModeNormalState->targetHeight);
             Camera_setBlendCurveMode(0);
             (*gCameraInterface)
                 ->setMode(CAMERA_MODE_VIEWFINDER_RESOURCE_ID, 1, 0, sizeof(CameraModeViewfinderSettings),

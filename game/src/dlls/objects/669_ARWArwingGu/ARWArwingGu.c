@@ -154,7 +154,8 @@ void ARWArwingGu_update(GameObject* obj)
         {
             alpha = gArwingGuAlphaMax[0];
         }
-        objAnim->alpha = alpha;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        objAnim->alpha = (s32)(alpha);
         break;
     }
     }

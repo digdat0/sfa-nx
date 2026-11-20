@@ -531,9 +531,32 @@ struct ShaderInfo {
   std::bitset<MaxTextures> sampledIndTextures;
   std::bitset<MaxIndTexMtxs> usedIndTexMtxs;
   u32 uniformSize = 0;
+  // SFA-NX: the vertex shader reads texgen and color channel setup from the uniform (shader.cpp,
+  // "generic vertex shader"), so one vertex shader serves every texgen/lighting combination of a
+  // vertex format. The vertex part of the uniform comes first and its size depends only on whether
+  // the lights are included; the fragment shader skips it.
+  std::array<u32, 4 * MaxTexCoord> tgParams{}; // per texgen: source, kind | normalize << 8, matrix, 0
+  std::array<u32, MaxColorChannels> chanFlags{};
+  u32 tgCount = 0;
+  u32 vtxUniformSize = 0;
+  u8 litPairs = 0; // bit 0: COLOR0/ALPHA0 light, bit 1: COLOR1/ALPHA1 light
+
   bool usesFog : 1 = false;
-  bool lightingEnabled : 1 = false;
+  bool lightingEnabled : 1 = false; // vertex uniform carries the lights
   u8 lineMode : 2 = 0;
+};
+// The vertex part of the GX uniform without lights (shader.cpp generic vertex shader).
+constexpr u32 VtxUniformBaseSize = 16 + 16 + 64 + 16 + 48 * (MaxPnMtx + MaxTexMtx) + 48 * MaxPnMtx + 16 * 3 +
+                                   16 * MaxTexCoord + 48 * MaxTexCoord + 16 * MaxColorChannels * 2;
+// Texgen kinds in ShaderInfo::tgParams.
+enum : u32 { TgKindMtx3x4 = 0, TgKindMtx2x4 = 1, TgKindSrtg = 2, TgKindBump = 3, TgSrcNone = 0xff };
+struct GXShaderModules {
+  wgpu::ShaderModule vertex;
+  wgpu::ShaderModule fragment;
+};
+struct GXShaderSources {
+  std::string vertex;
+  std::string fragment;
 };
 struct BindGroupRanges {
   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
@@ -541,11 +564,11 @@ struct BindGroupRanges {
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept;
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
-                                    wgpu::ShaderModule shader, const char* label) noexcept;
-std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
-                                uint32_t normalAttachment = UINT32_MAX) noexcept;
-wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
-                                DstAlphaMode dstAlphaMode) noexcept;
+                                    const GXShaderModules& shader, const char* label) noexcept;
+GXShaderSources build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
+                                    uint32_t normalAttachment = UINT32_MAX) noexcept;
+GXShaderModules build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
+                             DstAlphaMode dstAlphaMode) noexcept;
 GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept;
 
 u8 comp_type_size(GXAttr attr, GXCompType type) noexcept;

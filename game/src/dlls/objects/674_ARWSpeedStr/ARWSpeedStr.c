@@ -71,7 +71,8 @@ void ARWSpeedStr_update(GameObject* obj) {
         state->alpha = 140.0f;
     }
 
-    obj->anim.alpha = state->alpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->anim.alpha = (s32)(state->alpha);
 }
 
 void ARWSpeedStr_init(GameObject* obj, ObjPlacement* placement) {

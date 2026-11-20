@@ -2595,7 +2595,8 @@ int partfx_spawnObject(GameObject* sourceObj, int effectValue, PartFxSpawnParams
         cfg.velocityZ = extraArgs[2];
         cfg.scale = 0.001f;
         cfg.lifetimeFrames = 0x28;
-        cfg.initialAlpha = (u8)spawnParams->scale;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        cfg.initialAlpha = (u8)(s32)spawnParams->scale;
         cfg.linkGroup = 10;
         cfg.behaviorFlags = 0x200;
         cfg.textureId = 0xc13;

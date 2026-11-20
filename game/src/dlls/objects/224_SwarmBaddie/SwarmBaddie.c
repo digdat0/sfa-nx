@@ -159,7 +159,8 @@ void SwarmBaddie_update(GameObject* obj) {
         state->hitVolumeEnvelope -= 0.005f;
     }
     volume = state->hitVolumeEnvelope;
-    Sfx_SetObjectChannelVolume(obj, 0x40, (63.0f * volume),
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    Sfx_SetObjectChannelVolume(obj, 0x40, ((s32)(63.0f * volume)),
                                0.05f * mathSinf((SWARMBADDIE_PI * (f32)(state->yawWavePhase + state->rollWavePhase)) /
                                                 SWARMBADDIE_S16_ANGLE_SCALE) +
                                    volume);

@@ -26,6 +26,11 @@
 
 #include <tracy/Tracy.hpp>
 
+#ifdef AURORA_GFX_DEKO3D
+#include "direct.h" // switch/deko
+#include "resource_cache.hpp"
+#endif
+
 namespace aurora::gfx {
 using namespace detail;
 using webgpu::g_device;
@@ -185,6 +190,136 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
 #endif
 }
 
+#ifdef AURORA_GFX_DEKO3D
+// SFA-NX direct renderer (switch/deko/direct.h): a pass of GX draws, clear draws, viewports and
+// scissors goes straight to the native command list; anything else takes the WebGPU path.
+bool direct_eligible(const RenderPass& passInfo) {
+  if (passInfo.colorAttachmentCount == 0 || !passInfo.colorAttachments[0].view) {
+    return false;
+  }
+  const auto gxEncoder = gx_draw_encoder();
+  const auto clearEncoder = clear_draw_encoder();
+  for (const auto& cmd : passInfo.commands) {
+    switch (cmd.type) {
+    case CommandType::SetViewport:
+    case CommandType::SetScissor:
+      break;
+    case CommandType::Draw:
+      if (cmd.data.draw.encoder != gxEncoder && cmd.data.draw.encoder != clearEncoder &&
+          cmd.data.draw.encoder != nullptr) {
+        return false;
+      }
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
+
+void render_pass_direct(wgpu::CommandEncoder& cmd, RenderPass& passInfo) {
+  const auto& c0 = passInfo.colorAttachments[0];
+  const auto colorLoad =
+      c0.loadOp != wgpu::LoadOp::Undefined ? c0.loadOp : (c0.clear ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load);
+  kd::direct::PassDesc desc{
+      .color = c0.view.Get(),
+      .depth = passInfo.depthStencilView.Get(),
+      .clearColor = colorLoad == wgpu::LoadOp::Clear,
+      .clearValue = {c0.clearValue.x(), c0.clearValue.y(), c0.clearValue.z(), c0.clearValue.w()},
+      .clearDepth = passInfo.depthStencilView && passInfo.hasDepth &&
+                    (passInfo.depthLoadOp != wgpu::LoadOp::Undefined ? passInfo.depthLoadOp
+                                                                     : (passInfo.clearDepth ? wgpu::LoadOp::Clear
+                                                                                            : wgpu::LoadOp::Load)) ==
+                        wgpu::LoadOp::Clear,
+      .depthClearValue = passInfo.clearDepthValue,
+      .label = passInfo.label.c_str(),
+  };
+  const auto& res = resources();
+  kd::direct::begin_pass(cmd.Get(), desc,
+                         {
+                             .staticGroup = res.staticBindGroup.Get(),
+                             .uniformGroup = res.uniformBindGroup.Get(),
+                             .emptyTextures = gx::g_emptyTextureBindGroup.Get(),
+                             .indexBuffer = res.indexBuffer.Get(),
+                         });
+  const auto gxEncoder = gx_draw_encoder();
+  const auto& size = c0.size;
+  for (auto& command : passInfo.commands) {
+    switch (command.type) {
+    case CommandType::SetViewport: {
+      const auto& vp = command.data.setViewport;
+      const auto depth = gx::viewport_depth(vp.znear, vp.zfar, gx::UseReversedZ);
+      kd::direct::set_viewport(vp.left, vp.top, vp.width, vp.height, depth.min, depth.max);
+    } break;
+    case CommandType::SetScissor: {
+      const auto& sc = command.data.setScissor;
+      const auto x = std::clamp(static_cast<uint32_t>(sc.x), 0u, size.width);
+      const auto y = std::clamp(static_cast<uint32_t>(sc.y), 0u, size.height);
+      const auto w = std::clamp(static_cast<uint32_t>(sc.width), 0u, size.width - x);
+      const auto h = std::clamp(static_cast<uint32_t>(sc.height), 0u, size.height - y);
+      kd::direct::set_scissor(x, y, w, h);
+    } break;
+    case CommandType::Draw: {
+      auto& draw = command.data.draw;
+      if (draw.encoder == nullptr) {
+        break;
+      }
+      if (draw.encoder == gxEncoder) {
+        gx::DrawData data;
+        std::memcpy(&data, draw.payload.data(), sizeof(data));
+        WGPURenderPipeline main = nullptr;
+        WGPURenderPipeline prepass = nullptr;
+        if (!get_pipeline_raw(data.pipeline, main, prepass)) {
+          break; // still compiling: skipped, as gx::render does
+        }
+        WGPUBindGroup textures = nullptr;
+        if (data.bindGroups.textureBindGroup) {
+          textures = find_bind_group_raw(data.bindGroups.textureBindGroup);
+          if (!textures) {
+            break;
+          }
+        }
+        kd::direct::gx_draw({
+            .main = main,
+            .prepass = prepass,
+            .textures = textures,
+            .uniformOffset = data.uniformRange.offset,
+            .indexOffset = data.idxRange.offset,
+            .immediates = &data.immediateData,
+            .immediateBytes = sizeof(data.immediateData),
+            .vtxCount = data.vtxCount,
+            .indexCount = data.indexCount,
+            .instanceCount = data.instanceCount,
+            .blendConstant = data.dstAlpha != UINT32_MAX,
+            .blendAlpha = data.dstAlpha / 255.f,
+        });
+      } else {
+        clear::DrawData data;
+        std::memcpy(&data, draw.payload.data(), sizeof(data));
+        WGPURenderPipeline main = nullptr;
+        WGPURenderPipeline prepass = nullptr;
+        if (!get_pipeline_raw(data.pipeline, main, prepass)) {
+          break;
+        }
+        kd::direct::clear_draw({
+            .pipeline = main,
+            .color = {static_cast<float>(data.color.r), static_cast<float>(data.color.g),
+                      static_cast<float>(data.color.b), static_cast<float>(data.color.a)},
+            .viewport = {0.f, 0.f, static_cast<float>(size.width), static_cast<float>(size.height), data.depth,
+                         data.depth},
+            .scissor = {static_cast<uint32_t>(data.rect.x), static_cast<uint32_t>(data.rect.y),
+                        static_cast<uint32_t>(data.rect.width), static_cast<uint32_t>(data.rect.height)},
+        });
+      }
+    } break;
+    default:
+      break;
+    }
+  }
+  kd::direct::end_pass();
+}
+#endif
+
 void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo, uint32_t passIndex) {
   ZoneScoped;
   if (!passInfo.sealed) {
@@ -235,6 +370,12 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
     };
     depthStencilAttachmentPtr = &depthStencilAttachment;
   }
+#ifdef AURORA_GFX_DEKO3D
+  if (aurora_direct_renderer() && direct_eligible(passInfo)) {
+    render_pass_direct(cmd, passInfo);
+  } else
+#endif
+  {
   const auto label = passInfo.label.empty() ? fmt::format("Render pass {}", passIndex)
                                             : fmt::format("{} {}", passInfo.label, passIndex);
   const wgpu::RenderPassDescriptor renderPassDescriptor{
@@ -248,6 +389,7 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
   auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
   render_pass(pass, frame, passInfo);
   pass.End();
+  }
 
   if (passInfo.captureDepthSnapshot) {
     depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView,

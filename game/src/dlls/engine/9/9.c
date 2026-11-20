@@ -343,7 +343,8 @@ void cloudaction_update(void* p1, void* p2, void* state, int p4, u16 val) {
     }
     lbl_803DB618[0] = lbl_803DB618[1];
     lbl_803DB618[1] = (u16)val;
-    gCloudActionRuntime.textureScrollStep = fhReadBEF32(&cfg->scrollSpeed) / 3.0f;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gCloudActionRuntime.textureScrollStep = (s32)(fhReadBEF32(&cfg->scrollSpeed) / 3.0f);
     gCloudActionRuntime.pad19 = 0;
     if ((cfg->flags2 & 4) != 0) {
         gCloudActionRuntime.layerRenderEnabled = 0;

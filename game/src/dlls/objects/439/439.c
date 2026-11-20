@@ -282,7 +282,8 @@ static void sc_musictree_update(GameObject* obj) {
         f32 deltaX = obj->anim.localPosX - player->anim.localPosX;
         f32 deltaZ = obj->anim.localPosZ - player->anim.localPosZ;
         f32 distance = sqrtf(deltaX * deltaX + deltaZ * deltaZ);
-        u16 distanceU16 = distance;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        u16 distanceU16 = (s32)(distance);
         if (distanceU16 < state->hearRadius) {
             if (((state->flags & SC_MUSIC_TREE_APPROACH_BURST) != 0) &&
                 (state->previousDistance >= state->hearRadius) && (state->proximityCooldown <= 0.0f)) {

@@ -54,7 +54,8 @@ void EnterSaveNameScreen_render(void) {
         gameTextShowStr((char*)buf, i + 0x2a, 0, 0);
     }
 
-    gEnterSaveNameColorAnimTime = gEnterSaveNameColorAnimTime + timeDelta;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gEnterSaveNameColorAnimTime = (s32)(gEnterSaveNameColorAnimTime + timeDelta);
 
     gameTextSetColor((int)(mathSinf(0.17259522f * gEnterSaveNameColorAnimTime) * 128.0f + 127.0f),
                      (int)(mathSinf(0.14382935f * gEnterSaveNameColorAnimTime) * 128.0f + 127.0f),

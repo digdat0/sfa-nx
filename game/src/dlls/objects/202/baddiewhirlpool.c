@@ -44,7 +44,8 @@ void iceBaddie_leaveWhirlpoolGroup(GameObject* obj, EnemyState* state)
 void baddie_initWhirlpoolState(GameObject* obj, EnemyState* state)
 {
     state->sightRange = 60.0f;
-    state->userData2 = (u8)state->aggroRange;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    state->userData2 = (u8)(s32)state->aggroRange;
     state->aggroRange = 160.0f;
     state->flags2E4 = 0x42001;
     state->animPlaySpeed = 0.01f;

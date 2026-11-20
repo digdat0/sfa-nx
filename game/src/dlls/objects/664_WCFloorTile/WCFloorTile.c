@@ -146,7 +146,8 @@ void wcfloortile_update(GameObject* obj)
         {
             a = 255.0f;
         }
-        objAnim->alpha = a;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        objAnim->alpha = (s32)(a);
     }
         ObjHits_EnableObject(obj);
         break;

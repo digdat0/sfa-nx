@@ -328,7 +328,8 @@ static void staffUpdateQuakeSpell(void) {
         fade = gStaffQuakeSpellState.fade;
         gStaffQuakeSpellState.radius *= 0.97f;
         gStaffQuakeSpellState.heightScale *= 1.01f;
-        ((GameObject*)q->object)->anim.alpha = fade;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        ((GameObject*)q->object)->anim.alpha = (s32)(fade);
         ((GameObject*)q->object)->anim.rootMotionScale += 0.07f;
         if (gStaffQuakeSpellState.fade < 1.0f) {
             q->active = 0;
@@ -401,7 +402,8 @@ void staffDrawQuakeSpellRing(void) {
     if (gStaffQuakeSpellState.active != 0) {
         f32 scale;
         f32 z;
-        setupQuakeSpellRingGxState(gStaffQuakeSpellState.fade);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        setupQuakeSpellRingGxState((s32)(gStaffQuakeSpellState.fade));
         memcpy(mView, Camera_GetViewMatrix(), 0x30);
         PSMTXRotRad(mRot, 'x', gStaffHalfPi[0]);
         scale = gStaffQuakeSpellState.scale;

@@ -1517,7 +1517,8 @@ void ktrex_render(GameObject* obj, u32 p2, u32 p3, u32 p4, u32 p5, char visible)
         {
             lightningRender((LightningEffect*)e);
             ((LightningEffect*)gKTRexState->lightning[i])->timer =
-                (f32)(u32)((LightningEffect*)gKTRexState->lightning[i])->timer + timeDelta;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                (s32)((f32)(u32)((LightningEffect*)gKTRexState->lightning[i])->timer + timeDelta);
             if (((LightningEffect*)gKTRexState->lightning[i])->timer >=
                 ((LightningEffect*)gKTRexState->lightning[i])->lifetime)
             {

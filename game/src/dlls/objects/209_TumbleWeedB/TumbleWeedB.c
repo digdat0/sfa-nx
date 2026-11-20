@@ -628,7 +628,8 @@ void tumbleweed_updateStateMachine(GameObject* obj) {
                 }
             }
             targetDistance = sqrtf(targetDistanceSquared);
-            state->distToTarget = targetDistance;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->distToTarget = (s32)(targetDistance);
             {
                 f32 anchorOffsetX = obj->anim.localPosX - state->anchorPosX;
                 f32 anchorOffsetZ = obj->anim.localPosZ - state->anchorPosZ;
@@ -786,7 +787,8 @@ void tumbleweed_updateTargetedStateMachine(GameObject* obj) {
             targetOffsetX = obj->anim.localPosX - player->anim.localPosX;
             targetOffsetZ = obj->anim.localPosZ - player->anim.localPosZ;
             targetDistance = sqrtf(targetOffsetX * targetOffsetX + targetOffsetZ * targetOffsetZ);
-            state->distToTarget = targetDistance;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->distToTarget = (s32)(targetDistance);
             if (state->distToTarget < state->triggerRange) {
                 state->phase = TUMBLEWEED_PHASE_ROLLING;
                 obj->anim.resetHitboxFlags = obj->anim.resetHitboxFlags & ~INTERACT_FLAG_DISABLED;
@@ -800,7 +802,8 @@ void tumbleweed_updateTargetedStateMachine(GameObject* obj) {
         targetOffsetX = obj->anim.localPosX - player->anim.localPosX;
         targetOffsetZ = obj->anim.localPosZ - player->anim.localPosZ;
         targetDistance = sqrtf(targetOffsetX * targetOffsetX + targetOffsetZ * targetOffsetZ);
-        state->distToTarget = targetDistance;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        state->distToTarget = (s32)(targetDistance);
         targetDistanceInt = state->distToTarget;
         if ((f32)targetDistanceInt > 20.0f) {
             f32 rotationScale;
@@ -910,7 +913,8 @@ void tumbleweed_init(GameObject* obj, TumbleweedPlacement* placement) {
 
     state->anchorPosX = obj->anim.localPosX;
     state->anchorPosZ = obj->anim.localPosZ;
-    state->triggerRange = (u16)(2.0f * ObjAnim_ReadPlacementF32(&obj->anim, &(placement->scale)));
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    state->triggerRange = (u16)(s32)(2.0f * ObjAnim_ReadPlacementF32(&obj->anim, &(placement->scale)));
     state->variant = placement->variant;
     state->targetScale = obj->anim.rootMotionScale;
     state->phaseValue = state->targetScale / (f32)(s32)randomGetRange(0xc8, 0x1f4);

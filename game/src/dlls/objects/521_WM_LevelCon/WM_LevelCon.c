@@ -72,15 +72,18 @@ const f32 gWmLevelControlOverrideLightIntensity[1] = {100.0f};
 static void WmLevelControl_blendColor(u8* output, const u8* from, const u8* to) {
     {
         int red = from[0];
-        output[0] = (u8)(red + gWmLevelControlBlendFactor * (to[0] - red));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        output[0] = (u8)(s32)(red + gWmLevelControlBlendFactor * (to[0] - red));
     }
     {
         int green = from[1];
-        output[1] = (u8)(green + gWmLevelControlBlendFactor * (to[1] - green));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        output[1] = (u8)(s32)(green + gWmLevelControlBlendFactor * (to[1] - green));
     }
     {
         int blue = from[2];
-        output[2] = (u8)(blue + gWmLevelControlBlendFactor * (to[2] - blue));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        output[2] = (u8)(s32)(blue + gWmLevelControlBlendFactor * (to[2] - blue));
     }
 }
 
@@ -145,7 +148,8 @@ void WM_LevelControl_updateSkyLighting(GameObject* obj) {
                     gWmLevelControlBlendedFogColor[2]);
 
     gWmLevelControlBlendedLightIntensity =
-        gWmLevelControlBlendFactor * gWmLevelControlLightIntensityRange[0] + gWmLevelControlLightIntensityBase[0];
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)(gWmLevelControlBlendFactor * gWmLevelControlLightIntensityRange[0] + gWmLevelControlLightIntensityBase[0]);
     skySetOverrideLightDirectionEnabled(1);
     skySetOverrideLightDirection(gWmLevelControlBlendFactor * (toDirection.x - fromDirection.x) + fromDirection.x,
                                  gWmLevelControlBlendFactor * (toDirection.y - fromDirection.y) + fromDirection.y,

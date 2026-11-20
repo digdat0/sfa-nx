@@ -104,7 +104,8 @@ void wctempledia_update(GameObject* obj) {
     Sfx_KeepAliveLoopedObjectSound(obj, SFXTRIG_en_treedrum16);
     {
         f32 ratio = state->currentSpeed / state->targetTable[2];
-        Sfx_SetObjectSfxVolume(go, SFXTRIG_en_treedrum16, (u8)(18.0f * ratio + 109.0f), 0.75f * ratio + 0.25f);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        Sfx_SetObjectSfxVolume(go, SFXTRIG_en_treedrum16, (u8)(s32)(18.0f * ratio + 109.0f), 0.75f * ratio + 0.25f);
     }
     for (i = 0; i < WCTEMPLE_DIA_STAGE_COUNT; i++) {
         if ((state->stageMask & (1 << i)) == 0 && mainGetBit(state->gamebits[i]) != 0) {

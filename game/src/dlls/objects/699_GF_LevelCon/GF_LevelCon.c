@@ -127,7 +127,8 @@ int gf_levelcon_SeqFn(GameObject* obj, int eventId, ObjSeqState* animUpdate)
             skyRed = 112.5f;
             skyGreen = 150.0f;
             skyBlue = 180.0f;
-            skySetBaseColor(7, skyRed, skyGreen, skyBlue, 0, 0);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            skySetBaseColor(7, (s32)(skyRed), (s32)(skyGreen), (s32)(skyBlue), 0, 0);
             skySetLightDirection(7, -0.5f, -1.0f, -0.5f);
             getEnvfxAct(obj, obj, GFLEVELCON_ENVFX_B, 0);
             break;
@@ -176,7 +177,8 @@ int gf_levelcon_SeqFn(GameObject* obj, int eventId, ObjSeqState* animUpdate)
             skyRed = 112.5f;
             skyGreen = 150.0f;
             skyBlue = 180.0f;
-            skySetBaseColor(7, skyRed, skyGreen, skyBlue, 0, 0);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            skySetBaseColor(7, (s32)(skyRed), (s32)(skyGreen), (s32)(skyBlue), 0, 0);
             skySetLightDirection(7, 0.5f, -1.0f, -0.5f);
             getEnvfxAct(obj, obj, GFLEVELCON_ENVFX_B, 0);
             break;

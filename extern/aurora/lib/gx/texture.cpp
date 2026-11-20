@@ -1,4 +1,7 @@
 #include "texture.hpp"
+#if defined(__SWITCH__)
+extern "C" int melee_nx_opt(const char* key, int fallback); // switch/src/perf_switch.cpp
+#endif
 
 #include "../gfx/recording.hpp"
 #include "../gfx/tex_palette_conv.hpp"
@@ -721,7 +724,21 @@ void end_frame() noexcept {
   s_stats.publishBytes = streamingStats.publishBytes;
   ++s_frameCount;
   apply_pending_invalidations();
-  sweep_object_caches();
+  // Entries expire after ObjectCacheIdleFrames (600), so sweeping every 60 frames changes nothing visible and
+  // saves the Switch's game thread ~0.6 ms/frame (2026-11-17 profiles). It was off while the SFA GPU hang
+  // (2026-11-18) was bisected; that hang was the GPFIFO overflow fixed in build 2009. perf.cfg
+  // `tex_sweep_every 1` sweeps every frame again.
+#if defined(__SWITCH__)
+  static const int sweepEvery = [] {
+    const int n = melee_nx_opt("tex_sweep_every", 60);
+    return n < 1 ? 1 : n;
+  }();
+#else
+  constexpr int sweepEvery = 1;
+#endif
+  if (s_frameCount % sweepEvery == 0) {
+    sweep_object_caches();
+  }
 }
 
 void shutdown() noexcept {

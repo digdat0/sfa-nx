@@ -94,7 +94,8 @@ STATIC_ASSERT(sizeof(WorldPlanetFoxSpawnSetup) == WORLDPLANET_FOX_SPAWN_SETUP_SI
 #define WORLDPLANET_LERP_CHANNEL(dst, from, to, channel, t)                                                            \
     {                                                                                                                  \
         int value = (from).channel;                                                                                    \
-        (dst).channel = value + (t) * (f32)((to).channel - value);                                                     \
+        /* SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (docs/SWITCH_PORT.md) */ \
+        (dst).channel = (s32)(value + (t) * (f32)((to).channel - value));                                                     \
     }
 
 f32 gWorldPlanetPathProgress;
@@ -143,7 +144,8 @@ void worldplanet_updateMapLighting(GameObject* obj) {
     skySetMoonColor(WORLDPLANET_SKY_LIGHT_MASK, gWorldPlanetCurMoon.red, gWorldPlanetCurMoon.green,
                     gWorldPlanetCurMoon.blue);
 
-    gWorldPlanetCurIntensity = gWorldPlanetLightingLerpT * 128.0f + 32.0f;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gWorldPlanetCurIntensity = (s32)(gWorldPlanetLightingLerpT * 128.0f + 32.0f);
     skySetLightDirection(WORLDPLANET_SKY_LIGHT_MASK, 0.739264f, 0.0f, 0.673415f);
 }
 

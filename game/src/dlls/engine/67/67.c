@@ -169,7 +169,8 @@ void CameraModeStaffAnim_updateTargetAction(CameraObject* camera, GameObject* ta
     state = gCameraModeStaffAnimState;
     viewfinderSettings.radius = state->actionParamX;
     viewfinderSettings.yOffset = state->actionParamZ;
-    viewfinderSettings.height = state->actionParamY;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    viewfinderSettings.height = (s32)(state->actionParamY);
     cam = *gCameraInterface;
     cam->setMode(CAMERA_MODE_VIEWFINDER_RESOURCE_ID, 1, 0, sizeof(CameraModeViewfinderSettings), &viewfinderSettings, 0,
                  0xff);

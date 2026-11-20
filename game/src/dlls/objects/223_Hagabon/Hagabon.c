@@ -79,9 +79,10 @@ void Hagabon_updateMovement(GameObject* obj, HagabonState* state) {
 
     gHagabonLastCurvePoint = curve->curve.idx;
 
-    state->wavePhaseA += (u16)(128.0f * timeDelta);
-    state->wavePhaseB += (u16)(256.0f * timeDelta);
-    state->wavePhaseC += (u16)(512.0f * timeDelta);
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    state->wavePhaseA += (u16)(s32)(128.0f * timeDelta);
+    state->wavePhaseB += (u16)(s32)(256.0f * timeDelta);
+    state->wavePhaseC += (u16)(s32)(512.0f * timeDelta);
 
     obj->anim.rotZ = (s16)((1000.0f) * (mathSinf(((3.1415927f) * (f32)(u32)state->wavePhaseA) / (32768.0f)) +
                                         mathSinf(((3.1415927f) * (f32)(u32)state->wavePhaseB) / (32768.0f))));
@@ -236,7 +237,8 @@ void Hagabon_update(GameObject* obj) {
 
     if ((obj->anim.alpha != 0) && (((flags = state->flags) & (HAGABON_FLAG_FADE_IN | HAGABON_FLAG_FADE_OUT)) != 0)) {
         if ((flags & HAGABON_FLAG_FADE_OUT) != 0) {
-            obj->anim.alpha = (u8)((f32)(u32)obj->anim.alpha - timeDelta);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            obj->anim.alpha = (u8)(s32)((f32)(u32)obj->anim.alpha - timeDelta);
             if (obj->anim.alpha <= HAGABON_FADE_OUT_END_ALPHA) {
                 obj->userData1 = 1;
                 obj->anim.alpha = 0;
@@ -246,7 +248,8 @@ void Hagabon_update(GameObject* obj) {
             ObjHits_DisableObject(obj);
         }
         if ((state->flags & HAGABON_FLAG_FADE_IN) != 0) {
-            obj->anim.alpha = (u8)((f32)(u32)obj->anim.alpha + timeDelta);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            obj->anim.alpha = (u8)(s32)((f32)(u32)obj->anim.alpha + timeDelta);
             if (obj->anim.alpha >= HAGABON_FADE_IN_END_ALPHA) {
                 obj->anim.alpha = 0xff;
                 state->flags &= ~HAGABON_FLAG_FADE_IN;

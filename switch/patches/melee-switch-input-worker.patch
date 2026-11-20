@@ -1,0 +1,54 @@
+diff --git a/src/pc/input_poll.c b/src/pc/input_poll.c
+--- a/src/pc/input_poll.c
++++ b/src/pc/input_poll.c
+@@ -16,6 +16,15 @@
+ 
+ static int SDLCALL input_poll_worker(void* data) {
+     (void)data;
++#if defined(__SWITCH__)
++    /* Switch uses native Horizon HID gamepads in PADRead on the main thread;
++     * there is no keyboard. Sleeping this worker prevents 250 context switches/sec
++     * and saves precious CPU time on the 3 cores. */
++    while (atomic_load_explicit(&s_poll_running, memory_order_relaxed)) {
++        SDL_Delay(1000);
++    }
++    return 0;
++#else
+     /* Request high thread priority so input sampling is immune to general CPU loads. */
+     SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+ 
+@@ -23,7 +32,7 @@
+     uint64_t next_tick = SDL_GetTicksNS();
+ 
+     while (atomic_load_explicit(&s_poll_running, memory_order_relaxed)) {
+-        /* Apply keyboard and touch virtual controller states every 1 ms */
++        /* Apply keyboard and touch virtual controller states */
+         pc_keyboard_apply();
+         atomic_fetch_add_explicit(&s_poll_count, 1, memory_order_relaxed);
+ 
+@@ -37,9 +46,17 @@
+         }
+     }
+     return 0;
++#endif
+ }
+ 
+ void pc_input_poll_init(void) {
++#if defined(__SWITCH__)
++    /* PADRead samples Horizon controllers on the main thread. Switch has no
++     * keyboard/touch state for this worker to merge, so creating an idle SDL
++     * thread only burns a kernel handle and the port's 8 MiB stack floor. */
++    pc_log_line("Switch input polling uses PADRead on the main thread (no auxiliary poll worker)");
++    return;
++#else
+     if (s_poll_thread != NULL) {
+         return;
+     }
+@@ -51,6 +68,7 @@
+     } else {
+         pc_log_line("1000 Hz input polling thread started (1 ms polling interval)");
+     }
++#endif
+ }
+ 
+ void pc_input_poll_shutdown(void) {

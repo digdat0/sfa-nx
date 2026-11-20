@@ -153,9 +153,10 @@ void mmpAsteroidRe_update(GameObject* obj) {
             } else {
                 obj->anim.velocityY = -(0.051f * timeDelta - speed);
             }
-            state->bobPhase = 1024.0f * timeDelta + state->bobPhase;
-            state->rollPhase = 875.0f * timeDelta + state->rollPhase;
-            state->pitchPhase = 512.0f * timeDelta + state->pitchPhase;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->bobPhase = (s32)(1024.0f * timeDelta + state->bobPhase);
+            state->rollPhase = (s32)(875.0f * timeDelta + state->rollPhase);
+            state->pitchPhase = (s32)(512.0f * timeDelta + state->pitchPhase);
             objMove(obj, 0.0f, obj->anim.velocityY * timeDelta, 0.0f);
             obj->anim.localPosY = obj->anim.localPosY + mathSinf((MMP_ASTEROID_RE_PI * state->bobPhase) / 32768.0f);
             if (obj->anim.localPosY < state->baseY) {

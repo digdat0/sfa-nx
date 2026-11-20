@@ -391,7 +391,8 @@ void snowworm_applyReactionState(GameObject* obj, int* st)
 void snowworm_init(GameObject* obj, int* st)
 {
     ((EnemyState*)st)->sightRange = 60.0f;
-    ((EnemyState*)st)->userData2 = ((EnemyState*)st)->aggroRange;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    ((EnemyState*)st)->userData2 = (s32)(((EnemyState*)st)->aggroRange);
     ((EnemyState*)st)->aggroRange = 160.0f;
     ((EnemyState*)st)->flags2E4 = 0x42003;
     ((EnemyState*)st)->animPlaySpeed = 0.01f;

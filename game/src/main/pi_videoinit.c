@@ -345,6 +345,34 @@ void waitNextFrame(void) {
     OSStartStopwatch(&gFrameStopwatch);
     VIGetRetraceCount();
     timeDelta = 60.0f * (0.001f * gFrameElapsedMs);
+#ifdef __SWITCH__
+    {
+        // SFA-NX: "Frame step: Whole frames" in the - menu. The game advances by timeDelta frames; a measured
+        // delta wobbles around 1.0 (timer jitter), and the step remainder then made some frames step twice,
+        // which looked like judder at a steady 60 fps. With whole steps the delta is rounded to whole frames
+        // and the rounding error is carried to the next frame, so time still adds up. Only with a frame limit.
+        extern int sfaWholeFrameSteps(void);
+        extern int fhConfigFrameLimit(void);
+        static f32 sStepCarry;
+        if (sfaWholeFrameSteps() && fhConfigFrameLimit() != 0) {
+            f32 total = timeDelta + sStepCarry;
+            int whole = (int)(total + 0.5f);
+            if (whole < 1) {
+                whole = 1;
+            }
+            sStepCarry = total - (f32)whole;
+            if (sStepCarry > 1.0f) {
+                sStepCarry = 1.0f;
+            } else if (sStepCarry < -1.0f) {
+                sStepCarry = -1.0f;
+            }
+            timeDelta = (f32)whole;
+            gFrameStepRemainder = 0.0f;
+        } else {
+            sStepCarry = 0.0f;
+        }
+    }
+#endif
     if (gDvdErrorPauseActive != 0) {
         timeDelta = 0.0f;
     }

@@ -874,12 +874,14 @@ void doDistortionFilter(f32* pos, f32 radius, u8* mod, f32 angle)
         }
         else
         {
-            c1.a = 255.0f * sr;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            c1.a = (s32)(255.0f * sr);
         }
         sr *= 2.0f;
         if (sr > 1.0f)
             sr = 1.0f;
-        c3.a = 255.0f * sr;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        c3.a = (s32)(255.0f * sr);
     }
 
     GXSetTevKColor(GX_KCOLOR0, c0);
@@ -3765,7 +3767,8 @@ void renderMotionBlur(f32 alpha)
 {
     Mtx mtx;
 
-    gMotionBlurKColor.a = 255.0f * alpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    gMotionBlurKColor.a = (s32)(255.0f * alpha);
     selectReflectionTexture(0);
     GXSetTevKColor(GX_KCOLOR0, gMotionBlurKColor);
     GXSetTevKAlphaSel(GX_TEVSTAGE0, GX_TEV_KASEL_K0_A);

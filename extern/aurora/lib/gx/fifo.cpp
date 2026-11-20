@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <limits>
 #include <mutex>
 
@@ -25,7 +27,10 @@ uint32_t sDlWritePos = 0;
 namespace {
 constexpr Module Log{"aurora::gx::fifo"};
 constexpr auto kProcessingMode = ProcessingMode::Thread;
-constexpr uint32_t kDrawBatchSize = 1;
+// SFA-NX: publish every 8 draws instead of every draw. Each publish woke the worker (libstdc++'s atomic
+// wait/notify is a shared mutex + condition variable here, no futex), and the two cores fought over that
+// lock: 3.3 ms a frame of svcArbitrateLock on the FIFO thread (build 2046 profile).
+constexpr uint32_t kDrawBatchSize = 8;
 
 bool sFrameActive = false;
 uint32_t sPendingDraws = 0;
@@ -37,6 +42,32 @@ std::atomic<uint32_t> sWorkerWake{0};
 thread::Thread sWorkerThread;
 std::atomic<DrawDoneCallback> sDrawDoneCallback{nullptr};
 
+// SFA-NX: notify only a side that is actually waiting (the flag and the value are both seq_cst, so either
+// the waiter sees the new value or the writer sees the flag).
+std::atomic<bool> sWorkerSleeping{false};
+std::atomic<uint32_t> sProcessedWaiters{0};
+
+// SFA-NX frame overlap (end_frame_async): the game thread starts the next frame while this thread finishes
+// the last one. Each frame's commands live in their own buffer: the previous frame's buffer stays readable
+// here until it is processed, and the buffer before it is reused for the next frame. A frame boundary is a
+// stream position with work to run (end the frame's recording, open the next); at most one is pending.
+uint8_t* sPrevData = nullptr; // previous frame's commands (guarded by sBufferMutex)
+uint32_t sPrevCapacity = 0;
+uint64_t sPrevBase = 0;
+uint32_t sPrevSize = 0;
+struct Boundary {
+  uint64_t pos;
+  std::function<void()> work;
+};
+std::deque<Boundary> sBoundaries; // guarded by sBufferMutex
+// SFA-NX: the FIFO thread processes outside sBufferMutex (holding it made the game thread's frame hand-over
+// wait for the whole pass in progress). The buffer it reads is named here; growing the current buffer moves it
+// and, while the FIFO thread still reads the old copy, leaves that copy here for the FIFO thread to free.
+const uint8_t* sProcessingData = nullptr; // guarded by sBufferMutex
+uint8_t* sRetiredData = nullptr;          // guarded by sBufferMutex
+std::atomic<uint64_t> sBoundariesQueued{0};
+std::atomic<uint64_t> sBoundariesDone{0};
+
 void dispatch_draw_done() noexcept {
   if (const auto callback = sDrawDoneCallback.load(std::memory_order_acquire); callback != nullptr) {
     callback();
@@ -44,42 +75,98 @@ void dispatch_draw_done() noexcept {
 }
 
 void wake_worker() noexcept {
-  sWorkerWake.fetch_add(1, std::memory_order_release);
-  sWorkerWake.notify_all();
+  sWorkerWake.fetch_add(1, std::memory_order_seq_cst);
+  if (sWorkerSleeping.load(std::memory_order_seq_cst)) {
+    sWorkerWake.notify_all();
+  }
 }
 
 void process_to(uint64_t target, std::memory_order order) noexcept {
   uint64_t processed = sProcessed.load(std::memory_order_relaxed);
-  while (processed < target) {
+  while (true) {
     ProcessResult result{};
+    std::function<void()> boundary;
+    uint64_t limit = target;
     {
-      std::lock_guard lock{sBufferMutex};
-      AURORA_ASSERT(processed >= sStreamBase && target <= sStreamBase + detail::sBufferSize,
-                    "FIFO processing range [{}, {}) is outside buffered range [{}, {})", processed, target, sStreamBase,
-                    sStreamBase + detail::sBufferSize);
-      const auto start = static_cast<uint32_t>(processed - sStreamBase);
-      const auto size = static_cast<uint32_t>(target - processed);
-      result = process(detail::sBufferData + start, size);
+      std::unique_lock lock{sBufferMutex};
+      if (!sBoundaries.empty() && sBoundaries.front().pos <= processed) {
+        boundary = std::move(sBoundaries.front().work);
+        sBoundaries.pop_front();
+      } else if (processed >= target) {
+        break;
+      } else {
+        if (!sBoundaries.empty() && sBoundaries.front().pos < limit) {
+          limit = sBoundaries.front().pos;
+        }
+        const uint8_t* data;
+        uint64_t base;
+        if (sPrevSize != 0 && processed < sPrevBase + sPrevSize) {
+          data = sPrevData;
+          base = sPrevBase;
+          limit = std::min<uint64_t>(limit, sPrevBase + sPrevSize);
+        } else {
+          AURORA_ASSERT(processed >= sStreamBase && limit <= sStreamBase + detail::sBufferSize,
+                        "FIFO processing range [{}, {}) is outside buffered range [{}, {})", processed, limit,
+                        sStreamBase, sStreamBase + detail::sBufferSize);
+          data = detail::sBufferData;
+          base = sStreamBase;
+        }
+        sProcessingData = data;
+        lock.unlock();
+        result = process(data + static_cast<uint32_t>(processed - base), static_cast<uint32_t>(limit - processed));
+        lock.lock();
+        sProcessingData = nullptr;
+        if (sRetiredData != nullptr) {
+          free(sRetiredData);
+          sRetiredData = nullptr;
+        }
+      }
     }
-    AURORA_ASSERT(result.bytesProcessed > 0 && result.bytesProcessed <= target - processed,
+    if (boundary) {
+      boundary();
+      sBoundariesDone.fetch_add(1, std::memory_order_seq_cst);
+      sBoundariesDone.notify_all();
+      continue;
+    }
+    AURORA_ASSERT(result.bytesProcessed > 0 && result.bytesProcessed <= limit - processed,
                   "FIFO processor made invalid progress: processed {} of {} remaining bytes", result.bytesProcessed,
-                  target - processed);
+                  limit - processed);
     if (result.drawDone) {
       dispatch_draw_done();
     }
     processed += result.bytesProcessed;
-    sProcessed.store(processed, order);
-    sProcessed.notify_all();
+    sProcessed.store(processed, order == std::memory_order_relaxed ? order : std::memory_order_seq_cst);
+    if (sProcessedWaiters.load(std::memory_order_seq_cst) != 0) {
+      sProcessed.notify_all();
+    }
+  }
+}
+
+// True while a frame boundary queued by end_frame_async has not run yet on the FIFO thread.
+bool boundaries_pending() noexcept {
+  return sBoundariesDone.load(std::memory_order_acquire) != sBoundariesQueued.load(std::memory_order_relaxed);
+}
+
+// Waits until every queued frame boundary has run (the previous frame is fully recorded and submitted).
+void wait_boundaries() noexcept {
+  const uint64_t queued = sBoundariesQueued.load(std::memory_order_relaxed);
+  uint64_t done = sBoundariesDone.load(std::memory_order_acquire);
+  while (done != queued) {
+    sBoundariesDone.wait(done, std::memory_order_acquire);
+    done = sBoundariesDone.load(std::memory_order_acquire);
   }
 }
 
 void worker_main(std::stop_token token) noexcept {
-  std::stop_callback wakeOnStop{token, wake_worker};
+  std::stop_callback wakeOnStop{token, [] {
+                                  sWorkerWake.fetch_add(1, std::memory_order_seq_cst);
+                                  sWorkerWake.notify_all();
+                                }};
   while (true) {
     const uint32_t event = sWorkerWake.load(std::memory_order_acquire);
     const uint64_t processed = sProcessed.load(std::memory_order_relaxed);
     const uint64_t published = sPublished.load(std::memory_order_acquire);
-    if (published != processed) {
+    if (published != processed || boundaries_pending()) {
       process_to(published, std::memory_order_release);
       continue;
     }
@@ -87,7 +174,13 @@ void worker_main(std::stop_token token) noexcept {
     if (token.stop_requested()) {
       break;
     }
-    sWorkerWake.wait(event, std::memory_order_acquire);
+    // Announce the sleep, then check once more for work published meanwhile (see sWorkerSleeping above).
+    sWorkerSleeping.store(true, std::memory_order_seq_cst);
+    if (sPublished.load(std::memory_order_seq_cst) == sProcessed.load(std::memory_order_relaxed) &&
+        !boundaries_pending() && !token.stop_requested()) {
+      sWorkerWake.wait(event, std::memory_order_acquire);
+    }
+    sWorkerSleeping.store(false, std::memory_order_relaxed);
   }
 }
 
@@ -133,6 +226,17 @@ void init() {
   sPublished.store(0, std::memory_order_relaxed);
   sProcessed.store(0, std::memory_order_relaxed);
   sWorkerWake.store(0, std::memory_order_relaxed);
+  free(sPrevData);
+  sPrevData = nullptr;
+  free(sRetiredData);
+  sRetiredData = nullptr;
+  sProcessingData = nullptr;
+  sPrevCapacity = 0;
+  sPrevBase = 0;
+  sPrevSize = 0;
+  sBoundaries.clear();
+  sBoundariesQueued.store(0, std::memory_order_relaxed);
+  sBoundariesDone.store(0, std::memory_order_relaxed);
 
   start_worker();
 }
@@ -146,6 +250,37 @@ void end_frame() noexcept {
   clear_draw_cache(); // command_processor
 }
 
+void set_frame_inactive() noexcept { sFrameActive = false; }
+
+void end_frame_async(std::function<void()> work) {
+  // One frame in flight: the previous frame's boundary must have run, so its buffer is free again.
+  wait_boundaries();
+  const uint64_t target = sStreamBase + detail::sBufferSize;
+  {
+    std::lock_guard lock{sBufferMutex};
+    sBoundaries.push_back({target, std::move(work)});
+    uint8_t* spare = sPrevData;
+    uint32_t spareCapacity = sPrevCapacity;
+    if (spare == nullptr) {
+      spareCapacity = detail::sBufferCapacity;
+      spare = static_cast<uint8_t*>(malloc(spareCapacity));
+      AURORA_ASSERT(spare != nullptr, "fifo::end_frame_async: failed to allocate {} bytes", spareCapacity);
+    }
+    sPrevData = detail::sBufferData;
+    sPrevCapacity = detail::sBufferCapacity;
+    sPrevBase = sStreamBase;
+    sPrevSize = detail::sBufferSize;
+    detail::sBufferData = spare;
+    detail::sBufferCapacity = spareCapacity;
+    detail::sBufferSize = 0;
+    sStreamBase = target;
+  }
+  sBoundariesQueued.fetch_add(1, std::memory_order_seq_cst);
+  sPendingDraws = 0;
+  sPublished.store(target, std::memory_order_seq_cst);
+  wake_worker();
+}
+
 void write_data_grow(const void* data, uint32_t length) {
   const uint64_t needed64 = static_cast<uint64_t>(detail::sBufferSize) + length;
   AURORA_ASSERT(needed64 <= std::numeric_limits<uint32_t>::max(), "fifo::write_data: buffer size overflow");
@@ -154,6 +289,16 @@ void write_data_grow(const void* data, uint32_t length) {
   const auto newCapacity = static_cast<uint32_t>(
       std::min<uint64_t>(std::max(doubledCapacity, needed64), std::numeric_limits<uint32_t>::max()));
   const auto grow = [newCapacity] {
+    if (detail::sBufferData != nullptr && detail::sBufferData == sProcessingData) {
+      // The FIFO thread is reading this buffer outside the lock: copy, and let it free the old one.
+      auto* fresh = static_cast<uint8_t*>(malloc(newCapacity));
+      AURORA_ASSERT(fresh != nullptr, "fifo::write_data: failed to allocate {} bytes", newCapacity);
+      AURORA_ASSERT(sRetiredData == nullptr, "fifo::write_data: a retired buffer is still pending");
+      std::memcpy(fresh, detail::sBufferData, detail::sBufferSize);
+      sRetiredData = detail::sBufferData;
+      detail::sBufferData = fresh;
+      return;
+    }
     auto* resized = static_cast<uint8_t*>(realloc(detail::sBufferData, newCapacity));
     AURORA_ASSERT(resized != nullptr, "fifo::write_data: failed to allocate {} bytes", newCapacity);
     detail::sBufferData = resized;
@@ -177,7 +322,7 @@ void publish() noexcept {
   const uint64_t target = sStreamBase + detail::sBufferSize;
   if (target > sPublished.load(std::memory_order_relaxed)) {
     sPendingDraws = 0;
-    sPublished.store(target, std::memory_order_release);
+    sPublished.store(target, std::memory_order_seq_cst);
     if (kProcessingMode == ProcessingMode::Thread) {
       wake_worker();
     } else {
@@ -233,6 +378,9 @@ bool in_display_list() { return detail::sInDisplayList; }
 
 void drain() {
   if (detail::sBufferSize == 0) {
+    if (kProcessingMode == ProcessingMode::Thread) {
+      wait_boundaries();
+    }
     return;
   }
 
@@ -246,16 +394,18 @@ void drain() {
     process_to(target, std::memory_order_relaxed);
     break;
   case ProcessingMode::Thread: {
-    sPublished.store(target, std::memory_order_release);
+    sPublished.store(target, std::memory_order_seq_cst);
     wake_worker();
 
-    uint64_t processed = sProcessed.load(std::memory_order_acquire);
-    if (processed < target) {
-      do {
-        sProcessed.wait(processed, std::memory_order_acquire);
-        processed = sProcessed.load(std::memory_order_acquire);
-      } while (processed < target);
+    // Registered as a waiter so the FIFO thread notifies (see sProcessedWaiters above).
+    sProcessedWaiters.fetch_add(1, std::memory_order_seq_cst);
+    uint64_t processed = sProcessed.load(std::memory_order_seq_cst);
+    while (processed < target) {
+      sProcessed.wait(processed, std::memory_order_acquire);
+      processed = sProcessed.load(std::memory_order_acquire);
     }
+    sProcessedWaiters.fetch_sub(1, std::memory_order_relaxed);
+    wait_boundaries();
     break;
   }
   }
@@ -264,6 +414,7 @@ void drain() {
     std::lock_guard lock{sBufferMutex};
     sStreamBase = target;
     detail::sBufferSize = 0;
+    sPrevSize = 0;
   }
   sPendingDraws = 0;
 }
@@ -275,9 +426,11 @@ void clear_buffer() {
   const uint64_t processed = sProcessed.load(std::memory_order_acquire);
   AURORA_ASSERT(sPublished.load(std::memory_order_acquire) == processed,
                 "fifo::clear_buffer: published commands are still pending");
+  wait_boundaries();
   std::lock_guard lock{sBufferMutex};
   sStreamBase = processed;
   detail::sBufferSize = 0;
+  sPrevSize = 0;
   sPendingDraws = 0;
 }
 

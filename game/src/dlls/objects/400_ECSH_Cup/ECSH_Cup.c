@@ -148,7 +148,8 @@ static void ecshCup_update(GameObject* obj) {
                 if (fade >= 255.0f) {
                     fade = 255.0f;
                 }
-                obj->anim.renderAlpha = (u8)fade;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                obj->anim.renderAlpha = (u8)(s32)fade;
             }
             state->particleTimer -= timeDelta;
             if (state->particleTimer <= 0.0f) {
@@ -173,7 +174,8 @@ static void ecshCup_update(GameObject* obj) {
                 if (fade <= 0.0f) {
                     fade = 0.0f;
                 }
-                obj->anim.renderAlpha = (u8)fade;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                obj->anim.renderAlpha = (u8)(s32)fade;
             }
         } else if (mode == ECSH_CUP_ANIM_STATE_RUN_ACTIVE_SEQUENCE && mode != state->currentAnimState) {
             if (state->cupIndex == spiritCup) {

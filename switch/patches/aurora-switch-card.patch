@@ -1,0 +1,60 @@
+SFA-NX (applied by switch/build.sh): memory card (save) errors log the result code and SDL's error text,
+and deleting a save first removes an older deleted copy, because Horizon's rename does not overwrite.
+
+--- a/lib/dolphin/card.cpp
++++ b/lib/dolphin/card.cpp
+@@ -14,6 +14,8 @@
+ #include "../io.hpp"
+ #include "../card/FileIO.hpp"
+ 
++#include <SDL3/SDL_error.h>
++
+ namespace {
+ aurora::Module Log("aurora::card");
+ std::array<std::unique_ptr<aurora::card::ICard>, 2> CardChannels = {{}};
+@@ -458,7 +460,7 @@
+     CopyKabuFileHandleToDolphin(chan, handle, fileInfo);
+     res = card->commit();
+   } else
+-    Log.error("Failed to create file: {}", fileName);
++    Log.error("Failed to create file: {} (result {}, {})", fileName, static_cast<s32>(res), SDL_GetError());
+ 
+   return static_cast<s32>(res);
+ }
+@@ -486,7 +488,7 @@
+   auto res = card->deleteFile(fileName);
+ 
+   if (res != aurora::card::ECardResult::READY) {
+-    Log.error("Failed to delete file: {}", fileName);
++    Log.error("Failed to delete file: {} (result {}, {})", fileName, static_cast<s32>(res), SDL_GetError());
+   } else {
+     res = card->commit();
+   }
+@@ -906,9 +908,11 @@
+   auto res = card->fileWrite(handle, addr, length);
+ 
+   if (res != aurora::card::ECardResult::READY) {
+-    Log.error("Failed to write {} bytes to card", length);
++    Log.error("Failed to write {} bytes to card (result {}, {})", length, static_cast<s32>(res), SDL_GetError());
+   } else {
+     res = card->commit();
++    if (res != aurora::card::ECardResult::READY)
++      Log.error("Failed to commit card after write (result {}, {})", static_cast<s32>(res), SDL_GetError());
+   }
+ 
+   return static_cast<s32>(res);
+--- a/lib/card/CardGciFolder.cpp
++++ b/lib/card/CardGciFolder.cpp
+@@ -240,7 +240,11 @@
+   const auto deletedPath = m_folderPath / "_deleted";
+   const auto source = io::fs_path_to_string(m_folderPath / file->filename);
+   const auto destination = io::fs_path_to_string(deletedPath / file->filename);
+-  if (!io::create_directories(deletedPath) || !SDL_RenamePath(source.c_str(), destination.c_str())) {
++  // Horizon's rename does not replace an existing file: drop an older deleted copy first.
++  if (io::create_directories(deletedPath)) {
++    SDL_RemovePath(destination.c_str());
++  }
++  if (!SDL_RenamePath(source.c_str(), destination.c_str())) {
+     return ECardResult::IOERROR;
+   }
+   file->opened = false;

@@ -1068,7 +1068,8 @@ void camcontrol_updateTargetFeedback(void) {
         }
         alphaScale = 255.0f * reticle->currentMoveProgress;
         alphaScale = (alphaScale < 0.0f) ? 0.0f : ((alphaScale > 255.0f) ? 255.0f : alphaScale);
-        reticle->alpha = alphaScale;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        reticle->alpha = (s32)(alphaScale);
         gCamcontrolReticleSpin = CAMCONTROL_RETICLE_SPIN_STEP;
         reticle->rotX = (s16)(1024.0f * timeDelta + (float)reticle->rotX);
         break;

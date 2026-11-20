@@ -1,0 +1,48 @@
+SFA-NX (applied once to ref/SDL-dusklight, see switch/README.md): the Switch audio backend's PlayDevice
+queued a buffer and then waited in audrenWaitFrame under the device lock until it played (forever if the
+voice had stopped), which blocked the game and audio threads. It now queues, restarts a stopped voice and
+returns.
+
+diff --git a/src/audio/switch/SDL_switchaudio.c b/src/audio/switch/SDL_switchaudio.c
+--- a/src/audio/switch/SDL_switchaudio.c
++++ b/src/audio/switch/SDL_switchaudio.c
+@@ -180,7 +180,7 @@
+             return SDL_SetError("audrvVoiceAddWaveBuf failed");
+         }
+     }
+-    else if (!audrvVoiceIsPlaying(&device->hidden->driver, 0)) {
++    if (!audrvVoiceIsPlaying(&device->hidden->driver, 0)) {
+         audrvVoiceStart(&device->hidden->driver, 0);
+     }
+ 
+@@ -188,30 +188,6 @@
+     if (R_FAILED(res)) {
+         return SDL_SetError("audrvUpdate failed: 0x%x", res);
+     }
+-
+-    if (current >= 0) {
+-        while (device->hidden->buffer[current].state != AudioDriverWaveBufState_Playing) {
+-            audrvUpdate(&device->hidden->driver);
+-            audrenWaitFrame();
+-        }
+-    }
+-    else {
+-        current = -1;
+-        for (int i = 0; i < NUM_AUDIO_BUFFERS; i++) {
+-            if (device->hidden->buffer[i].state == AudioDriverWaveBufState_Playing) {
+-                current = i;
+-                break;
+-            }
+-        }
+-        if (current < 0) {
+-            audrenWaitFrame();
+-            return true;
+-        }
+-        while (device->hidden->buffer[current].state == AudioDriverWaveBufState_Playing) {
+-            audrvUpdate(&device->hidden->driver);
+-            audrenWaitFrame();
+-        }
+-    }
+     return true;
+ }
+ 

@@ -346,7 +346,8 @@ static inline f32 andross_getSwayPosition(f32 sway, f32 phase, f32 base) {
 
 static void andross_updateDistortion(GameObject* obj, AndrossState* state, f32 progress) {
     f32 radius;
-    obj->anim.alpha = state->fadeAlpha * 255.0f;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->anim.alpha = (s32)(state->fadeAlpha * 255.0f);
     if (progress < 0.5f) {
         radius = 1000.0f - 2.0f * (800.0f * progress);
         if (progress < 0.01f) {
@@ -369,7 +370,8 @@ static inline void andross_setModelAlpha(ModelFileHeader* model, f32 fade) {
     int i;
     for (i = 0; i < model->renderOpCount; i++) {
         Shader* renderOp = ObjModel_GetRenderOp(model, i);
-        renderOp->alphaOverride = fade * 255.0f;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        renderOp->alphaOverride = (s32)(fade * 255.0f);
     }
 }
 

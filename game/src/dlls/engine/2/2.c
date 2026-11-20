@@ -4774,7 +4774,8 @@ void ObjSeq_ApplyFrameCurves(GameObject* obj, GameObject* seqObj, u8* seq, int f
             {
                 val = 255.0f;
             }
-            seqObj->anim.alpha = val;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            seqObj->anim.alpha = (s32)(val);
         }
 
         if (((ObjSeqState*)seq)->trackRunLength[4] != 0)

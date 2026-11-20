@@ -277,7 +277,8 @@ void imSnowClaw_update(GameObject* obj) {
                 distanceFade = 1.0f;
             }
             distanceFade = 1.0f - distanceFade;
-            state->mountAlpha = 255.0f * distanceFade;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->mountAlpha = (s32)(255.0f * distanceFade);
             if (obj->anim.modelState != NULL) {
                 obj->anim.modelState->flags |= OBJ_MODEL_STATE_SHADOW_FADE_OUT;
             }

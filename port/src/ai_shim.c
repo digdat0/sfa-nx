@@ -1,5 +1,6 @@
 #include <dolphin/ai.h>
 #include <dolphin/dvd.h>
+#include <dolphin/os.h>
 #include <SDL3/SDL.h>
 #include <stdio.h>
 
@@ -9,9 +10,42 @@
 #define AI_STREAM_SAMPLE_RATE 48043
 #define AI_STREAM_BLOCK_SIZE 32
 #define AI_STREAM_BLOCK_FRAMES 28
+/* How much mixed audio is kept queued ahead of the speaker. 40 ms normally; after the audio thread had to wait
+   longer than the queue holds (the game thread kept the "interrupts off" lock while it merged file tables or ran
+   DVD callbacks: up to 68 ms on hardware) or the queue ran dry, it grows to cover that wait, up to 120 ms, and
+   shrinks back 10 ms at a time once 10 s pass without another. A deeper queue only adds latency, never gaps.
+   Only the thread that pumps (the audio thread, or the game thread without it) reads or changes it. */
 #define AI_OUTPUT_QUEUE_MS 40
-#define AI_DMA_QUEUE_BYTES ((AI_DMA_SAMPLE_RATE * 4 * AI_OUTPUT_QUEUE_MS) / 1000)
-#define AI_STREAM_QUEUE_BYTES ((AI_STREAM_SAMPLE_RATE * 4 * AI_OUTPUT_QUEUE_MS) / 1000)
+#define AI_OUTPUT_QUEUE_MAX_MS 120
+static int sQueueMs = AI_OUTPUT_QUEUE_MS;
+static Uint64 sQueueGrownNs;
+#define AI_DMA_QUEUE_BYTES ((AI_DMA_SAMPLE_RATE * 4 * sQueueMs) / 1000)
+#define AI_STREAM_QUEUE_BYTES ((AI_STREAM_SAMPLE_RATE * 4 * sQueueMs) / 1000)
+
+/* Called before each threaded pump with how long it waited for the lock and whether the queue ran dry. */
+static void aiAdaptQueue(int waitUs, int underrun) {
+  const Uint64 now = SDL_GetTicksNS();
+  int need = sQueueMs;
+  if (underrun) {
+    need = sQueueMs + 20;
+  }
+  if (waitUs / 1000 + 10 > need) {
+    need = waitUs / 1000 + 10; /* the wait, plus one pump period of margin and some */
+  }
+  if (need > AI_OUTPUT_QUEUE_MAX_MS) {
+    need = AI_OUTPUT_QUEUE_MAX_MS;
+  }
+  if (need > sQueueMs) {
+    sQueueMs = need;
+    sQueueGrownNs = now;
+  } else if (sQueueMs > AI_OUTPUT_QUEUE_MS && now - sQueueGrownNs > 10ull * 1000000000ull) {
+    sQueueMs -= 10;
+    if (sQueueMs < AI_OUTPUT_QUEUE_MS) {
+      sQueueMs = AI_OUTPUT_QUEUE_MS;
+    }
+    sQueueGrownNs = now;
+  }
+}
 
 static AIDCallback sDmaCallback;
 static AISCallback sStreamCallback;
@@ -37,6 +71,20 @@ static s32 sStreamHistLeft1;
 static s32 sStreamHistLeft2;
 static s32 sStreamHistRight1;
 static s32 sStreamHistRight2;
+
+/* Audio thread: fills the SDL queues every few ms instead of once per game frame in VIWaitForRetrace, so
+   the MusyX mix (salCtrlDsp, ~1.3 ms a frame on Switch) leaves the game thread and the sound no longer
+   stutters when the frame rate drops. Each pump runs as the GameCube's audio interrupt did: holding the
+   "interrupts off" lock (os_shim.c), so it never overlaps a section the game protected. Off: the game
+   thread pumps once per frame, as before. */
+#define AI_THREAD_PERIOD_NS (4 * 1000000ull)
+static SDL_Thread* sThread;
+static void aiStartThread(void);
+static SDL_AtomicInt sThreaded = {1};
+static SDL_AtomicInt sThreadStop;
+#if defined(__SWITCH__)
+void melee_nx_perf_thread(const char* name); /* switch/src/perf_switch.cpp: core and priority */
+#endif
 
 #if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
 static void aiSetMuted(u32 muted) {
@@ -64,6 +112,19 @@ static void aiUpdateMuteToggle(void) {
 }
 #endif
 
+#if defined(__SWITCH__)
+/* On Switch the SDL audio devices are resumed once when opened and never paused again: pausing and resuming
+   the Switch device blocked inside SDL's device lock (sdl-dusklight-sfa-nx.patch fixes the worst case), and
+   the main and audio threads both waited on it. Clearing the stream is enough to silence it. */
+#define aiPauseDevice(stream) ((void)(stream))
+#define aiResumeDevice(stream) ((void)(stream))
+#define aiStartOpenedDevice(stream) SDL_ResumeAudioStreamDevice(stream)
+#else
+#define aiPauseDevice(stream) SDL_PauseAudioStreamDevice(stream)
+#define aiResumeDevice(stream) SDL_ResumeAudioStreamDevice(stream)
+#define aiStartOpenedDevice(stream) ((void)(stream))
+#endif
+
 static void aiOpenOutput(void) {
   SDL_AudioSpec spec;
 
@@ -81,6 +142,9 @@ static void aiOpenOutput(void) {
   sOutputStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
   if (sOutputStream == NULL) {
     fprintf(stderr, "[foxhollow] SDL audio output failed: %s\n", SDL_GetError());
+  }
+  if (sOutputStream != NULL) {
+    aiStartOpenedDevice(sOutputStream);
   }
 #if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
   else {
@@ -106,6 +170,9 @@ static void aiOpenStreamOutput(void) {
   sStreamOutput = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
   if (sStreamOutput == NULL) {
     fprintf(stderr, "[foxhollow] SDL stream audio output failed: %s\n", SDL_GetError());
+  }
+  if (sStreamOutput != NULL) {
+    aiStartOpenedDevice(sStreamOutput);
   }
 #if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
   else {
@@ -200,6 +267,7 @@ int fhAIPrepareStream(void* fileInfoPtr) {
     return 0;
   }
 
+  BOOL level = OSDisableInterrupts();
   if (sStreamData != NULL) {
     SDL_aligned_free(sStreamData);
   }
@@ -214,45 +282,56 @@ int fhAIPrepareStream(void* fileInfoPtr) {
   sStreamPlayState = AI_STREAM_STOP;
   aiOpenStreamOutput();
   if (sStreamOutput != NULL) {
-    SDL_PauseAudioStreamDevice(sStreamOutput);
+    aiPauseDevice(sStreamOutput);
     SDL_ClearAudioStream(sStreamOutput);
   }
+  OSRestoreInterrupts(level);
   return 1;
 }
 
 AIDCallback AIRegisterDMACallback(AIDCallback callback) {
+  BOOL level = OSDisableInterrupts();
   AIDCallback previous = sDmaCallback;
   sDmaCallback = callback;
+  OSRestoreInterrupts(level);
   return previous;
 }
 
+/* The AI register calls below take the "interrupts off" lock because the audio thread reads the same
+   state during a pump, just as the GameCube's audio interrupt could fire between two game instructions. */
 void AIInitDMA(uintptr_t startAddr, u32 length) {
+  BOOL level = OSDisableInterrupts();
   sDmaStartAddr = startAddr;
   sDmaLength = length;
+  OSRestoreInterrupts(level);
 }
 
 void AIStartDMA(void) {
+  BOOL level = OSDisableInterrupts();
   aiOpenOutput();
   sDmaRunning = 1;
   if (sOutputStream != NULL) {
-    SDL_ResumeAudioStreamDevice(sOutputStream);
+    aiResumeDevice(sOutputStream);
   }
+  OSRestoreInterrupts(level);
+  aiStartThread();
 }
 
 void AIStopDMA(void) {
+  BOOL level = OSDisableInterrupts();
   sDmaRunning = 0;
   if (sOutputStream != NULL) {
-    SDL_PauseAudioStreamDevice(sOutputStream);
+    aiPauseDevice(sOutputStream);
     SDL_ClearAudioStream(sOutputStream);
   }
+  OSRestoreInterrupts(level);
 }
 
-void fhAIPump(void) {
+/* One pump: top up the streamed-audio queue, then call the game's DMA callback (MusyX mixes the next block)
+   until the output queue holds sQueueMs of sound. */
+static void aiPumpAll(void) {
   int dmaQueued = sOutputStream != NULL ? SDL_GetAudioStreamQueued(sOutputStream) : 0;
 
-#if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
-  aiUpdateMuteToggle();
-#endif
   aiPumpStream();
   while (sDmaRunning != 0 && sOutputStream != NULL && dmaQueued < AI_DMA_QUEUE_BYTES) {
     AIDCallback callback;
@@ -266,6 +345,85 @@ void fhAIPump(void) {
       callback();
     }
   }
+}
+
+/* Crackle diagnosis (written to the profiler's reports): pumps that found the output queue empty
+   (an underrun: the speaker had nothing to play), pumps that found it under 10 ms, and the longest wait
+   for the "interrupts off" lock, which the game thread may hold. Reset when read. */
+static SDL_AtomicInt sStatUnderruns;
+static SDL_AtomicInt sStatLow;
+static SDL_AtomicInt sStatMaxWaitUs;
+
+void fhAIStats(int* underruns, int* low, int* maxWaitUs) {
+  *underruns = SDL_SetAtomicInt(&sStatUnderruns, 0);
+  *low = SDL_SetAtomicInt(&sStatLow, 0);
+  *maxWaitUs = SDL_SetAtomicInt(&sStatMaxWaitUs, 0);
+}
+
+/* The audio thread: every 4 ms, take the lock as an interrupt handler, record the statistics, adapt the
+   queue depth and pump. Its core and priority are set by perf_switch.cpp on Switch. */
+static int aiThreadMain(void* unused) {
+  (void)unused;
+#if defined(__SWITCH__)
+  melee_nx_perf_thread("SFA audio");
+#endif
+  while (SDL_GetAtomicInt(&sThreadStop) == 0) {
+    if (SDL_GetAtomicInt(&sThreaded) != 0) {
+      const Uint64 start = SDL_GetTicksNS();
+      fhIrqEnterHandler();
+      const int waitUs = (int)((SDL_GetTicksNS() - start) / 1000);
+      if (waitUs > SDL_GetAtomicInt(&sStatMaxWaitUs)) {
+        SDL_SetAtomicInt(&sStatMaxWaitUs, waitUs);
+      }
+      int underrun = 0;
+      if (sDmaRunning != 0 && sOutputStream != NULL) {
+        const int queued = SDL_GetAudioStreamQueued(sOutputStream);
+        if (queued == 0) {
+          SDL_AddAtomicInt(&sStatUnderruns, 1);
+          underrun = 1;
+        } else if (queued < AI_DMA_QUEUE_BYTES / 4) {
+          SDL_AddAtomicInt(&sStatLow, 1);
+        }
+        aiAdaptQueue(waitUs, underrun);
+      }
+      aiPumpAll();
+      fhIrqLeaveHandler();
+    }
+    SDL_DelayNS(AI_THREAD_PERIOD_NS);
+  }
+  return 0;
+}
+
+/* Starts the audio thread with the first DMA; if it cannot start, mixing stays on the game thread. */
+static void aiStartThread(void) {
+  if (sThread == NULL && SDL_GetAtomicInt(&sThreaded) != 0) {
+    sThread = SDL_CreateThread(aiThreadMain, "SFA audio", NULL);
+    if (sThread == NULL) {
+      fprintf(stderr, "[foxhollow] audio thread failed: %s; mixing on the game thread\n", SDL_GetError());
+      SDL_SetAtomicInt(&sThreaded, 0);
+    }
+  }
+}
+
+/* The - menu's "Audio thread" setting; turning it on starts the thread if output is already open. */
+int fhAIThreaded(void) { return SDL_GetAtomicInt(&sThreaded); }
+
+void fhAISetThreaded(int on) {
+  SDL_SetAtomicInt(&sThreaded, on != 0);
+  if (on != 0 && sOutputStream != NULL) {
+    aiStartThread();
+  }
+}
+
+/* Called once per game frame from VIWaitForRetrace: only pumps when the audio thread is not doing it. */
+void fhAIPump(void) {
+#if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
+  aiUpdateMuteToggle();
+#endif
+  if (SDL_GetAtomicInt(&sThreaded) != 0 && sThread != NULL) {
+    return;
+  }
+  aiPumpAll();
 }
 
 uintptr_t fhAIGetDMAStartAddr(void) { return sDmaStartAddr; }
@@ -287,16 +445,17 @@ void AIResetStreamSampleCount(void) { sStreamSampleCount = 0; }
 void AISetStreamTrigger(u32 trigger) { sStreamTrigger = trigger; }
 u32 AIGetStreamTrigger(void) { return sStreamTrigger; }
 void AISetStreamPlayState(u32 state) {
+  BOOL level = OSDisableInterrupts();
   sStreamPlayState = state;
-  if (sStreamOutput == NULL) {
-    return;
+  if (sStreamOutput != NULL) {
+    if (state == AI_STREAM_START) {
+      aiResumeDevice(sStreamOutput);
+    } else {
+      aiPauseDevice(sStreamOutput);
+      SDL_ClearAudioStream(sStreamOutput);
+    }
   }
-  if (state == AI_STREAM_START) {
-    SDL_ResumeAudioStreamDevice(sStreamOutput);
-  } else {
-    SDL_PauseAudioStreamDevice(sStreamOutput);
-    SDL_ClearAudioStream(sStreamOutput);
-  }
+  OSRestoreInterrupts(level);
 }
 u32 AIGetStreamPlayState(void) { return sStreamPlayState; }
 void AISetStreamSampleRate(u32 rate) { (void)rate; }

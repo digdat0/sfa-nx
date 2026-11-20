@@ -10,6 +10,9 @@
 #include "main/audio/sfx_trigger_ids.h"
 #include "main/camera.h"
 #include "main/camera_interface.h"
+#ifdef __SWITCH__
+int sfaSwitchInvertLook(void);
+#endif
 #include "main/debug.h"
 #include "main/dll/CAM/dll_0001_camcontrol.h"
 #include "main/dll/dll_0042_cameramodenormal.h"
@@ -155,6 +158,13 @@ void firstPersonDoControls(CameraObject* camera) {
     focus = (GameObject*)camera->anim.targetObj;
     stickX = padGetStickX(0);
     stickY = padGetStickY(0);
+#ifdef __SWITCH__
+    // SFA-NX: the - menu's Invert look (switch/src/switch_menu.cpp) flips the vertical stick for this camera
+    // mode. -128 has no positive counterpart in s8, so it becomes 127.
+    if (sfaSwitchInvertLook()) {
+        stickY = (s8)(stickY == -128 ? 127 : -stickY);
+    }
+#endif
     t = (60.0f - camera->fov) / 50.0f;
     zoom = (t < 0.0f) ? 0.0f : ((t > 1.0f) ? 1.0f : t);
     spin = stickX * (6.0f - 4.0f * zoom);

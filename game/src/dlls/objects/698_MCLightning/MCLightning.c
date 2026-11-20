@@ -101,7 +101,8 @@ void mclightning_render(GameObject* obj, int p2, int p3, int p4, int p5, f32 sca
             u32 frame;
             lightningRender(state->boltHandle);
             state->boltFrameTimer += timeDelta;
-            frame = (u16)(0.5f + state->boltFrameTimer);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            frame = (u16)(s32)(0.5f + state->boltFrameTimer);
             state->boltHandle->timer = frame;
             if (state->boltHandle->timer >= state->boltHandle->lifetime) {
                 mm_free(state->boltHandle);

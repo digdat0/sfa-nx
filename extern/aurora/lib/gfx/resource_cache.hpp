@@ -6,6 +6,8 @@ namespace aurora::gfx {
 
 BindGroupRef bind_group_ref(const WGPUBindGroupDescriptor& descriptor);
 wgpu::BindGroup find_bind_group(BindGroupRef id);
+// SFA-NX: without a reference; the cache keeps a group for 32 frames after its last use.
+WGPUBindGroup find_bind_group_raw(BindGroupRef id);
 wgpu::Sampler sampler_ref(const wgpu::SamplerDescriptor& descriptor);
 
 namespace detail {

@@ -122,7 +122,8 @@ void voxmaps_visitRouteNeighbor(struct RouteState* state, VoxBoxArg* srcBox, int
             routeNode->parentNodeIndex = (u8)(u16)parentNodeIndex;
             dxh = routeNode->x - state->tgtX;
             dzh = routeNode->z - state->tgtZ;
-            routeNode->hCost = (u16)(2.0f * sqrtf((f32)(dxh * dxh + dzh * dzh)));
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            routeNode->hCost = (u16)(s32)(2.0f * sqrtf((f32)(dxh * dxh + dzh * dzh)));
         }
         q = state->queue;
         q[++state->queueCount].value = idx;
@@ -304,7 +305,8 @@ void voxmaps_visitRouteNeighbor(struct RouteState* state, VoxBoxArg* srcBox, int
         routeNode->parentNodeIndex = (u8)(u16)parentNodeIndex;
         dxh = routeNode->x - state->tgtX;
         dzh = routeNode->z - state->tgtZ;
-        routeNode->hCost = (u16)(2.0f * sqrtf((f32)(dxh * dxh + dzh * dzh)));
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        routeNode->hCost = (u16)(s32)(2.0f * sqrtf((f32)(dxh * dxh + dzh * dzh)));
     }
 
     if (routeNode == NULL) {
@@ -663,7 +665,8 @@ int voxmaps_updateRoutePath(RouteNav* nav, RouteState* state) {
                 dx = node->x - state->tgtX;
                 dz = node->z - state->tgtZ;
                 d2 = dx * dx + dz * dz;
-                node->hCost = (u16)(2.0f * sqrtf((f32)d2));
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                node->hCost = (u16)(s32)(2.0f * sqrtf((f32)d2));
             }
             {
                 u16 cost = node->hCost + node->gCost;

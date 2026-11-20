@@ -177,7 +177,8 @@ int Credits_frameStart(void)
                     {
                         frac = 1.0f;
                     }
-                    alpha = 255.0f * frac;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    alpha = (s32)(255.0f * frac);
                 }
                 else if (cur < line->t2)
                 {

@@ -56,16 +56,43 @@ static u32 sPcMovieTexture;
 static OSTime sPcMovieNextFrameTime;
 static OSTime sPcMovieFrameTicks;
 
-static BOOL DecodeNextMovieFramePC(void) {
+s32 aurora_dvd_read_no_callbacks(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset);
+
+// SFA-NX: frame decoding can run on the movie worker (port/src/movie_worker.c). There the shared movie
+// state is guarded like the audio thread guards its work (the "interrupt handler" lock); on the game thread
+// it is the usual OSDisableInterrupts.
+static void MovieLock(int async, BOOL* level) {
+    if (async) {
+        fhIrqEnterHandler();
+    } else {
+        *level = OSDisableInterrupts();
+    }
+}
+
+static void MovieUnlock(int async, BOOL level) {
+    if (async) {
+        fhIrqLeaveHandler();
+    } else {
+        OSRestoreInterrupts(level);
+    }
+}
+
+// async is 1 when called on the movie worker. The disc read then uses aurora_dvd_read_no_callbacks: a
+// normal DVDRead would also run other pending game DVD callbacks, on the worker thread.
+static int DecodeNextMovieFramePC(int async) {
     AttractMoviePlayer* player = &gAttractMoviePlayer;
     AttractMovieReadBuffer* readBuffer = &player->readBuffer[0];
     AttractMovieTextureSet* textureSet = &player->textureSet[sPcMovieTexture];
     u32* componentSizes;
     u8* componentData;
     BOOL decoded = FALSE;
+    BOOL level = FALSE;
+    s32 got;
     u32 i;
 
-    if (DVDRead(&player->fileInfo, readBuffer->ptr, sPcMovieReadSize, sPcMovieReadOffset) != (s32)sPcMovieReadSize) {
+    got = async ? aurora_dvd_read_no_callbacks(&player->fileInfo, readBuffer->ptr, sPcMovieReadSize, sPcMovieReadOffset)
+                : DVDRead(&player->fileInfo, readBuffer->ptr, sPcMovieReadSize, sPcMovieReadOffset);
+    if (got != (s32)sPcMovieReadSize) {
         player->dvdError = -1;
         return FALSE;
     }
@@ -84,11 +111,14 @@ static BOOL DecodeNextMovieFramePC(void) {
             }
             decoded = decodeError == 0;
         } else if (player->compInfo.mFrameComp[i] == 1) {
+            MovieLock(async, &level);
             AttractMovieAudio_DecodeFramePC(componentData, sPcMovieFrame);
+            MovieUnlock(async, level);
         }
         componentData += componentSize;
     }
 
+    MovieLock(async, &level);
     player->curVideoFrameNumber = sPcMovieFrame;
     if (decoded) {
         player->videoError = 0;
@@ -105,6 +135,7 @@ static BOOL DecodeNextMovieFramePC(void) {
         sPcMovieReadSize = player->header.mFirstFrameSize;
         gAttractMovieLoopCompleted = 1;
     }
+    MovieUnlock(async, level);
     return TRUE;
 }
 
@@ -140,8 +171,8 @@ static void PlayControl(u32 retraceCount) {
         return;
     }
     now = OSGetTime();
-    if (now >= sPcMovieNextFrameTime) {
-        DecodeNextMovieFramePC();
+    // SFA-NX: the decode is handed to the movie worker; while the previous one runs, this frame starts none.
+    if (now >= sPcMovieNextFrameTime && fhMovieDecodeStart(DecodeNextMovieFramePC)) {
         sPcMovieNextFrameTime += sPcMovieFrameTicks;
         if (now - sPcMovieNextFrameTime >= sPcMovieFrameTicks) {
             sPcMovieNextFrameTime = now + sPcMovieFrameTicks;
@@ -253,7 +284,9 @@ void THPPlayerStop(void) {
     if ((gAttractMoviePlayer.isOpen != 0) && (gAttractMoviePlayer.state != 0)) {
         gAttractMoviePlayer.internalState = 0;
         gAttractMoviePlayer.state = 0;
+        // SFA-NX: then let a decode still running on the movie worker finish before the player is stopped.
         VISetPostRetraceCallback(OldVIPostCallback);
+        fhMovieDecodeWait();
 
         if (gAttractMoviePlayer.isOnMemory == 0) {
             DVDCancel((DVDCommandBlock*)&gAttractMoviePlayer.fileInfo);
@@ -339,7 +372,10 @@ BOOL prepareAttractMode(u32 movieIndex, s32 playFlags) {
         if (player->audioExists != 0) {
             AttractMovieAudio_InitQueuesPC();
         }
-        if (!DecodeNextMovieFramePC()) {
+        fhMovieDecodeWait();
+        // SFA-NX: (the wait above) a decode still running on the movie worker must finish before this
+        // decodes the first frame of a new movie on the game thread (async 0).
+        if (!DecodeNextMovieFramePC(0)) {
             return FALSE;
         }
         player->state = 1;

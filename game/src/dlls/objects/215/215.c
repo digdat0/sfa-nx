@@ -122,7 +122,8 @@ void KaldachomSpit_update(GameObject* obj) {
         if (obj->userData1 < KALDACHOMPSPIT_FADE_START_LIFETIME) {
             obj->anim.velocityY = -(KALDACHOMPSPIT_GRAVITY * timeDelta - obj->anim.velocityY);
             if ((f32)(u32)objAnim->alpha - (alphaDecay = KALDACHOMPSPIT_ALPHA_FADE_RATE * timeDelta) > 0.0f) {
-                objAnim->alpha = (f32)(u32)objAnim->alpha - alphaDecay;
+                // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                objAnim->alpha = (s32)((f32)(u32)objAnim->alpha - alphaDecay);
             } else {
                 Sfx_StopObjectChannel(obj, 0x7f);
                 objAnim->alpha = 0;

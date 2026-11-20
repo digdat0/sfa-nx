@@ -339,7 +339,8 @@ void titleScreenDrawMenuFrame(int alpha, int hideHighlight, u32 showArrows)
         gTitleScreenPulseTimer = m - 100.0f;
     }
     gTitleScreenPulseAlpha =
-        127.0f * mathCosf(3.142f * (2.0f * gTitleScreenPulseTimer) / 100.0f) + 128.0f;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        (s32)(127.0f * mathCosf(3.142f * (2.0f * gTitleScreenPulseTimer) / 100.0f) + 128.0f);
     if (gTitleScreenCursorY > 0.0f)
     {
         f32 (*m2)[4] = (f32 (*)[4])gTitleScreenMtx;

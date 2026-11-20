@@ -149,7 +149,8 @@ void ChukChuk_update(GameObject* obj) {
         player = Obj_GetPlayerObject();
         playerDeltaX = player->anim.localPosX - obj->anim.localPosX;
         playerDeltaZ = player->anim.localPosZ - obj->anim.localPosZ;
-        playerDistance = sqrtf(playerDeltaX * playerDeltaX + playerDeltaZ * playerDeltaZ);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        playerDistance = (s32)(sqrtf(playerDeltaX * playerDeltaX + playerDeltaZ * playerDeltaZ));
         if (playerDistance < state->triggerDistance) {
             if (state->prevDistance >= state->triggerDistance) {
                 state->flags = CHUKCHUK_FLAG_PRIMED | CHUKCHUK_FLAG_FORCED_ATTACK;

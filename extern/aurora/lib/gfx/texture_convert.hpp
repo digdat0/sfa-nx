@@ -52,6 +52,7 @@ struct ConvertedTexture {
 // Empty data means callers should upload the original bytes directly using to_wgpu(format).
 // hasArbitraryMips is only meaningful for decoded RGBA8 GC formats; PC formats skip that check.
 ConvertedTexture convert_texture(u32 format, uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data);
+bool convert_cmpr_to_bc1(uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data, ByteBuffer& out);
 ConvertedTexture convert_texture_palette(u32 textureFormat, uint32_t width, uint32_t height, uint32_t mips,
                                          ArrayRef<uint8_t> textureData, GXTlutFmt tlutFormat, uint16_t tlutEntries,
                                          ArrayRef<uint8_t> tlutData);

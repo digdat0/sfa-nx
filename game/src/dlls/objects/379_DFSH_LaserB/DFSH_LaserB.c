@@ -119,7 +119,8 @@ void dfshLaserBeam_update(GameObject* obj) {
     }
 
     if (state->beamState != 0) {
-        Sfx_SetObjectChannelVolume(obj, DFSH_LASER_BEAM_SFX_CHANNEL, 127.0f * state->beamVolumeScale, 0.5f);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        Sfx_SetObjectChannelVolume(obj, DFSH_LASER_BEAM_SFX_CHANNEL, (s32)(127.0f * state->beamVolumeScale), 0.5f);
     }
 
     beamRange = (f32)(int)ObjAnim_ReadPlacementS16(&obj->anim, &(placement->beamRange));

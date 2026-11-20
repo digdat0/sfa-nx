@@ -664,104 +664,736 @@ constexpr std::string_view nbt_slice_local(NbtSlice slice) noexcept {
   return slice == NbtSlice::B ? "in_binrm" : "in_tangent";
 }
 
-constexpr bool is_emboss_texgen(GXTexGenType type) noexcept { return type >= GX_TG_BUMP0 && type <= GX_TG_BUMP7; }
+constexpr std::string_view GxHelpers = R"""(
+fn bswap32(v: u32, le: bool) -> u32 {
+  if (le) {
+    return v;
+  }
+  return ((v & 0x000000FFu) << 24u) |
+         ((v & 0x0000FF00u) << 8u) |
+         ((v & 0x00FF0000u) >> 8u) |
+         ((v & 0xFF000000u) >> 24u);
+}
 
-auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 i, bool alpha) -> std::string {
-  std::string_view swizzle = alpha ? ".a"sv : ""sv;
-  std::string outVar;
-  std::string_view posVar;
-  if (UsePerPixelLighting) {
-    outVar = fmt::format("rast{}", i);
-    posVar = "in.mv_pos"sv;
+fn bswap16(v: u32, le: bool) -> u32 {
+  return select(((v & 0xFFu) << 8u) | (v >> 8u), v, le);
+}
+
+fn load_word(p: ptr<storage, array<u32>>, word_idx: u32) -> u32 {
+  // This guard is not expected to handle routine out-of-bounds accesses.
+  // It appears to discourage some Adreno drivers/optimizers from storage buffer
+  // optimizations that can cause visual artifacts, including vertex explosions
+  // in Dusklight.
+  if (word_idx < arrayLength(p)) {
+    return p[word_idx];
+  }
+  return 0u;
+}
+
+fn load_u8(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {
+  let word = load_word(p, byte_off / 4u);
+  let shift = (byte_off & 3u) * 8u;
+  return (word >> shift) & 0xFFu;
+}
+
+fn load_u32_raw(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {
+  let word_idx = byte_off >> 2u;
+  let sub = byte_off & 3u;
+  let lo = load_word(p, word_idx);
+  if (sub == 0u) {
+    return lo;
+  }
+  let hi = load_word(p, word_idx + 1u);
+  let shift = sub * 8u;
+  return (lo >> shift) | (hi << (32u - shift));
+}
+
+fn load_u16(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {
+  let word_idx = byte_off >> 2u;
+  let sub = byte_off & 3u;
+  let word = load_word(p, word_idx);
+  if (sub <= 2u) {
+    return bswap16(extractBits(word, sub * 8u, 16u), le);
+  }
+  let next = load_word(p, word_idx + 1u);
+  let raw = extractBits(word, 24u, 8u) | (extractBits(next, 0u, 8u) << 8u);
+  return bswap16(raw, le);
+}
+
+fn load_u24(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {
+  let raw = load_u32_raw(p, byte_off) & 0x00FFFFFFu;
+  if (le) {
+    return raw;
+  }
+  return ((raw & 0x0000FFu) << 16u) |
+         (raw & 0x00FF00u) |
+         ((raw & 0xFF0000u) >> 16u);
+}
+
+fn load_u32(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {
+  return bswap32(load_u32_raw(p, byte_off), le);
+}
+
+fn load_f32(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> f32 {
+  return bitcast<f32>(load_u32(p, byte_off, le));
+}
+
+fn raw_fetch_u8_1(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {
+  return load_u8(p, byte_off);
+}
+
+fn raw_fetch_u8_2(p: ptr<storage, array<u32>>, byte_off: u32) -> vec2u {
+  let word_idx = byte_off >> 2u;
+  let sub = byte_off & 3u;
+  let word = load_word(p, word_idx);
+  if (sub <= 2u) {
+    let shift = sub * 8u;
+    return vec2u(
+      extractBits(word, shift + 0u, 8u),
+      extractBits(word, shift + 8u, 8u),
+    );
+  }
+  let next = load_word(p, word_idx + 1u);
+  return vec2u(
+    extractBits(word, 24u, 8u),
+    extractBits(next, 0u, 8u),
+  );
+}
+
+fn raw_fetch_u8_3(p: ptr<storage, array<u32>>, byte_off: u32) -> vec3u {
+  let raw = load_u32_raw(p, byte_off);
+  return vec3u(
+    extractBits(raw, 0u, 8u),
+    extractBits(raw, 8u, 8u),
+    extractBits(raw, 16u, 8u),
+  );
+}
+
+fn raw_fetch_u8_4(p: ptr<storage, array<u32>>, byte_off: u32) -> vec4u {
+  let raw = load_u32_raw(p, byte_off);
+  return vec4u(
+    extractBits(raw, 0u, 8u),
+    extractBits(raw, 8u, 8u),
+    extractBits(raw, 16u, 8u),
+    extractBits(raw, 24u, 8u),
+  );
+}
+
+fn raw_fetch_u16_1(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {
+  return load_u16(p, byte_off, le);
+}
+
+fn raw_fetch_u16_2(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec2u {
+  return vec2u(
+    load_u16(p, byte_off + 0u, le),
+    load_u16(p, byte_off + 2u, le),
+  );
+}
+
+fn raw_fetch_u16_3(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec3u {
+  return vec3u(
+    load_u16(p, byte_off + 0u, le),
+    load_u16(p, byte_off + 2u, le),
+    load_u16(p, byte_off + 4u, le),
+  );
+}
+
+fn raw_fetch_u16_4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4u {
+  return vec4u(
+    load_u16(p, byte_off + 0u, le),
+    load_u16(p, byte_off + 2u, le),
+    load_u16(p, byte_off + 4u, le),
+    load_u16(p, byte_off + 6u, le),
+  );
+}
+
+fn raw_fetch_f32_1(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> f32 {
+  return load_f32(p, byte_off, le);
+}
+
+fn raw_fetch_f32_2(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec2f {
+  return vec2f(
+    load_f32(p, byte_off + 0u, le),
+    load_f32(p, byte_off + 4u, le),
+  );
+}
+
+fn raw_fetch_f32_3(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec3f {
+  return vec3f(
+    load_f32(p, byte_off + 0u, le),
+    load_f32(p, byte_off + 4u, le),
+    load_f32(p, byte_off + 8u, le),
+  );
+}
+
+fn raw_fetch_f32_4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  return vec4f(
+    load_f32(p, byte_off + 0u, le),
+    load_f32(p, byte_off + 4u, le),
+    load_f32(p, byte_off + 8u, le),
+    load_f32(p, byte_off + 12u, le),
+  );
+}
+
+fn fetch_u8_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {
+  let v = raw_fetch_u8_1(p, byte_off);
+  return f32(v) / f32(1u << frac);
+}
+
+fn fetch_s8_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {
+  let v = (bitcast<i32>(raw_fetch_u8_1(p, byte_off)) << 24) >> 24;
+  return f32(v) / f32(1u << frac);
+}
+
+fn fetch_u8_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {
+  let v = raw_fetch_u8_2(p, byte_off);
+  return vec2f(v) / f32(1u << frac);
+}
+
+fn fetch_s8_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {
+  let v = (bitcast<vec2i>(raw_fetch_u8_2(p, byte_off)) << vec2u(24u)) >> vec2u(24u);
+  return vec2f(v) / f32(1u << frac);
+}
+
+fn fetch_u8_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {
+  let v = raw_fetch_u8_3(p, byte_off);
+  return vec3f(v) / f32(1u << frac);
+}
+
+fn fetch_s8_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {
+  let v = (bitcast<vec3i>(raw_fetch_u8_3(p, byte_off)) << vec3u(24u)) >> vec3u(24u);
+  return vec3f(v) / f32(1u << frac);
+}
+
+fn fetch_u8_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {
+  let v = raw_fetch_u8_4(p, byte_off);
+  return vec4f(v) / f32(1u << frac);
+}
+
+fn fetch_s8_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {
+  let v = (bitcast<vec4i>(raw_fetch_u8_4(p, byte_off)) << vec4u(24u)) >> vec4u(24u);
+  return vec4f(v) / f32(1u << frac);
+}
+
+fn fetch_u16_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {
+  let v = raw_fetch_u16_1(p, byte_off, le);
+  return f32(v) / f32(1u << frac);
+}
+
+fn fetch_s16_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {
+  let v = bitcast<i32>(raw_fetch_u16_1(p, byte_off, le) << 16u) >> 16;
+  return f32(v) / f32(1u << frac);
+}
+
+fn fetch_u16_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {
+  let v = raw_fetch_u16_2(p, byte_off, le);
+  return vec2f(v) / f32(1u << frac);
+}
+
+fn fetch_s16_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {
+  let v = (bitcast<vec2i>(raw_fetch_u16_2(p, byte_off, le)) << vec2u(16u)) >> vec2u(16u);
+  return vec2f(v) / f32(1u << frac);
+}
+
+fn fetch_u16_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {
+  let v = raw_fetch_u16_3(p, byte_off, le);
+  return vec3f(v) / f32(1u << frac);
+}
+
+fn fetch_s16_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {
+  let v = (bitcast<vec3i>(raw_fetch_u16_3(p, byte_off, le)) << vec3u(16u)) >> vec3u(16u);
+  return vec3f(v) / f32(1u << frac);
+}
+
+fn fetch_u16_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {
+  let v = raw_fetch_u16_4(p, byte_off, le);
+  return vec4f(v) / f32(1u << frac);
+}
+
+fn fetch_s16_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {
+  let v = (bitcast<vec4i>(raw_fetch_u16_4(p, byte_off, le)) << vec4u(16u)) >> vec4u(16u);
+  return vec4f(v) / f32(1u << frac);
+}
+
+fn fetch_f32_1(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> f32 {
+  return raw_fetch_f32_1(p, byte_off, le);
+}
+
+fn fetch_f32_2(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec2f {
+  return raw_fetch_f32_2(p, byte_off, le);
+}
+
+fn fetch_f32_3(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec3f {
+  return raw_fetch_f32_3(p, byte_off, le);
+}
+
+fn fetch_f32_4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  return raw_fetch_f32_4(p, byte_off, le);
+}
+
+fn fetch_rgb565(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  let v = load_u16(p, byte_off, le);
+  return vec4f(
+    f32((v >> 11u) & 0x1Fu) / f32(0x1Fu),
+    f32((v >>  5u) & 0x3Fu) / f32(0x3Fu),
+    f32((v >>  0u) & 0x1Fu) / f32(0x1Fu),
+    1.0,
+  );
+}
+
+fn fetch_rgb8(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  let v = raw_fetch_u8_3(p, byte_off);
+  return vec4f(f32(v.x), f32(v.y), f32(v.z), 255.0) / 255.0;
+}
+
+fn fetch_rgbx8(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  let v = raw_fetch_u8_4(p, byte_off);
+  return vec4f(f32(v.x), f32(v.y), f32(v.z), 255.0) / 255.0;
+}
+
+fn fetch_rgba4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  let v = load_u16(p, byte_off, le);
+  return vec4f(
+    f32((v >> 12u) & 0x0Fu) / f32(0x0Fu),
+    f32((v >>  8u) & 0x0Fu) / f32(0x0Fu),
+    f32((v >>  4u) & 0x0Fu) / f32(0x0Fu),
+    f32((v >>  0u) & 0x0Fu) / f32(0x0Fu),
+  );
+}
+
+fn fetch_rgba6(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  let v = load_u24(p, byte_off, le);
+  return vec4f(
+    f32((v >> 18u) & 0x3Fu) / f32(0x3Fu),
+    f32((v >> 12u) & 0x3Fu) / f32(0x3Fu),
+    f32((v >>  6u) & 0x3Fu) / f32(0x3Fu),
+    f32((v >>  0u) & 0x3Fu) / f32(0x3Fu),
+  );
+}
+
+fn fetch_rgba8(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {
+  let v = raw_fetch_u8_4(p, byte_off);
+  return vec4f(v) / 255.0;
+}
+
+fn tev_overflow_f32(in: f32) -> f32 {
+  let byte_space = in * 255.0;
+  return (byte_space - floor(byte_space / 256.0) * 256.0) / 255.0;
+}
+
+fn tev_overflow_vec3f(in: vec3f) -> vec3f {
+  let byte_space = in * 255.0;
+  return (byte_space - floor(byte_space / 256.0) * 256.0) / 255.0;
+}
+
+fn tev_overflow_vec4f(in: vec4f) -> vec4f {
+  let byte_space = in * 255.0;
+  return (byte_space - floor(byte_space / 256.0) * 256.0) / 255.0;
+}
+
+)""";
+
+// SFA-NX generic vertex shader. Texgens and color channels are read from the uniform (ShaderInfo
+// tgParams/chanFlags, filled by shader_info.cpp) instead of being baked into the code, so the vertex
+// shader depends only on the vertex format, the primitive kind, whether lights are present and the
+// render target layout. Many GX configs then share one vertex shader, and uam (about 200 ms a shader
+// on the console) compiles each one once. Every active texgen and both color channels are written,
+// at fixed locations (cc0/cc1 at 0/1, texN at 2+N, mv_nrm at 10); the fragment shader reads only what
+// its TEV stages sample. The uniform starts with the vertex part (VtxUniformBaseSize, plus the lights).
+std::string build_vertex_source(const ShaderConfig& config, const ShaderInfo& info, bool useNormalTarget) {
+  std::string vtxInAttrs;
+  std::string pre;
+  // Load points for line/point expansion
+  std::string_view vidxAttr = "vidx"sv;
+  if (config.lineMode != 0) {
+    vtxInAttrs += ",\n    @builtin(instance_index) iidx: u32";
+    if (config.lineMode == 3) {
+      // GX_POINTS: each instance = one vertex, expand to quad
+      pre += fmt::format(
+          "\n    let in_vidx = iidx;"
+          "\n    let in_pos = {};"
+          "\n    let in_pnmtxidx = {};"
+          "\n    let mv_pos = vec4f(in_pos, 1.0) * ubuf.postex_mtx[in_pnmtxidx];",
+          attr_load(config, GX_VA_POS, "in_vidx"sv), attr_load(config, GX_VA_PNMTXIDX, "in_vidx"sv));
+    } else {
+      // GX_LINES / GX_LINESTRIP: each instance = two vertices, expand to quad
+      pre += fmt::format(
+          "\n    let use_b = vidx >= 2u;"
+          "\n    let vidx_a = iidx * {}u;"
+          "\n    let vidx_b = vidx_a + 1u;"
+          "\n    let in_vidx = select(vidx_a, vidx_b, use_b);"
+          "\n    let pos_a = {};"
+          "\n    let pos_b = {};"
+          "\n    let in_pos = select(pos_a, pos_b, use_b);"
+          "\n    let pnmtxidx_a = {};"
+          "\n    let pnmtxidx_b = {};"
+          "\n    let in_pnmtxidx = select(pnmtxidx_a, pnmtxidx_b, use_b);"
+          "\n    let mv_pos_a = vec4f(pos_a, 1.0) * ubuf.postex_mtx[pnmtxidx_a];"
+          "\n    let mv_pos_b = vec4f(pos_b, 1.0) * ubuf.postex_mtx[pnmtxidx_b];"
+          "\n    let mv_pos = select(mv_pos_a, mv_pos_b, use_b);",
+          config.lineMode == 1 ? 2 : 1, attr_load(config, GX_VA_POS, "vidx_a"sv),
+          attr_load(config, GX_VA_POS, "vidx_b"sv), attr_load(config, GX_VA_PNMTXIDX, "vidx_a"sv),
+          attr_load(config, GX_VA_PNMTXIDX, "vidx_b"sv));
+    }
+    vidxAttr = "in_vidx"sv;
+  } else if (config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE) {
+    pre += "\n    let in_pnmtxidx = imm.current_pnmtx;";
+  }
+
+  // Load vertex attributes
+  for (GXAttr attr = GX_VA_PNMTXIDX; attr <= GX_VA_TEX7; attr = static_cast<GXAttr>(attr + 1)) {
+    const auto attrType = config.attrs[attr].attrType;
+    if (attrType == GX_NONE) {
+      continue;
+    }
+    // in_pnmtxidx and in_pos written above for line mode
+    if ((attr != GX_VA_PNMTXIDX && attr != GX_VA_POS) || config.lineMode == 0) {
+      pre += fmt::format("\n    let {} = {};", vtx_attr(config, attr), attr_load(config, attr, vidxAttr));
+    }
+  }
+  const auto& nrmAttr = config.attrs[GX_VA_NRM];
+  if (nrmAttr.attrType != GX_NONE && nrmAttr.cnt == 9) {
+    pre += fmt::format("\n    let {} = {};", nbt_slice_local(NbtSlice::B),
+                       attr_load_nbt_slice(config, NbtSlice::B, vidxAttr));
+    pre += fmt::format("\n    let {} = {};", nbt_slice_local(NbtSlice::T),
+                       attr_load_nbt_slice(config, NbtSlice::T, vidxAttr));
   } else {
-    outVar = fmt::format("out.cc{}", i);
-    posVar = "mv_pos"sv;
+    pre += "\n    let in_binrm = vec3f(0.0);\n    let in_tangent = vec3f(0.0);";
   }
-  std::string ambSrc, matSrc;
-  if (cc.ambSrc == GX_SRC_VTX) {
-    if (UsePerPixelLighting) {
-      ambSrc = fmt::format("in.clr{}", i);
-    } else {
-      ambSrc = vtx_attr(config, static_cast<GXAttr>(GX_VA_CLR0 + i));
+
+  if (config.lineMode == 0) {
+    pre += fmt::format(
+        "\n    let mv_pos = vec4f({}, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
+        "\n    out.pos = vec4f(mv_pos, 1.0) * ubuf.proj;",
+        vtx_attr(config, GX_VA_POS));
+  } else if (config.lineMode == 3) {
+    // GX_POINTS: expand single vertex to axis-aligned screen-space square
+    pre +=
+        "\n    let clip = vec4f(mv_pos, 1.0) * ubuf.proj;"
+        "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
+        "\n    let point_size = ubuf.line_width * min(viewport_scale.x, viewport_scale.y);"
+        "\n    let x_sign = select(-1.0, 1.0, (vidx & 1u) != 0u);"
+        "\n    let y_sign = select(-1.0, 1.0, vidx >= 2u);"
+        "\n    let offset_px = vec2f(x_sign, y_sign) * (point_size / 2.0);"
+        "\n    let offset_ndc = (offset_px * 2.0) / ubuf.render_viewport_size;"
+        "\n    out.pos = vec4f(clip.xy + offset_ndc * clip.w, clip.zw);";
+  } else {
+    // GX_LINES / GX_LINESTRIP: expand line segment perpendicular to direction
+    pre +=
+        "\n    let clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
+        "\n    let clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
+        "\n    let ndc_a = clip_a.xy / clip_a.w;"
+        "\n    let ndc_b = clip_b.xy / clip_b.w;"
+        "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
+        "\n    let delta_px = (ndc_b - ndc_a) / 2.0 * ubuf.render_viewport_size;"
+        "\n    let dir_px = select(vec2f(1.0, 0.0), normalize(delta_px), dot(delta_px, delta_px) > 1e-10);"
+        "\n    let perp_px = vec2f(-dir_px.y, dir_px.x);"
+        "\n    let line_width = ubuf.line_width * min(viewport_scale.x, viewport_scale.y);"
+        "\n    let offset_px = perp_px * (line_width / 2.0) * select(-1.0, 1.0, (vidx & 1u) != 0u);"
+        "\n    let offset_ndc = (offset_px * 2.0) / ubuf.render_viewport_size;"
+        "\n    let clip_base = select(clip_a, clip_b, use_b);"
+        "\n    out.pos = vec4f(clip_base.xy + offset_ndc * clip_base.w, clip_base.zw);";
+  }
+  std::string vtxClipOut;
+  if (webgpu::g_gxClipEmulationSupported) {
+    vtxClipOut = "\n    @builtin(clip_distances) clip_dist: array<f32, 2>,";
+    pre +=
+        "\n    let gx_clip_z = (out.pos.z - out.pos.w * ubuf.depth_remap.y) / ubuf.depth_remap.x;"
+        "\n    out.clip_dist = array<f32, 2>(gx_clip_z, out.pos.w - gx_clip_z);";
+  }
+  pre += fmt::format(
+      "\n    let nrm_tmp = vec4f({}, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
+      "\n    let mv_nrm = select(nrm_tmp, normalize(nrm_tmp), dot(nrm_tmp, nrm_tmp) > 1e-10);",
+      vtx_attr(config, GX_VA_NRM));
+  std::string vtxOutAttrs;
+  if constexpr (EnableNormalVisualization) {
+    vtxOutAttrs += "\n    @location(11) nrm: vec3f,";
+    pre += "\n    out.nrm = mv_nrm;";
+  }
+  if (useNormalTarget) {
+    vtxOutAttrs += "\n    @location(10) mv_nrm: vec3f,";
+    pre += "\n    out.mv_nrm = mv_nrm;";
+  }
+
+  // Color channels: rgb from COLOR0/1, alpha from ALPHA0/1.
+  const auto clr0 = vtx_attr(config, GX_VA_CLR0);
+  const auto clr1 = vtx_attr(config, GX_VA_CLR1);
+  // A pair whose channels do not light (info.litPairs) only selects its material: the light loop is
+  // most of a lit shader's compile time.
+  pre += fmt::format(
+      "\n    out.cc0 = {0}(ubuf.chan_flags.x, ubuf.chan_flags.z, ubuf.light_mask.x, ubuf.light_mask.z, ubuf.cc_amb[0], "
+      "ubuf.cc_amb[2], ubuf.cc_mat[0], ubuf.cc_mat[2], {2}, mv_pos, mv_nrm);"
+      "\n    out.cc1 = {1}(ubuf.chan_flags.y, ubuf.chan_flags.w, ubuf.light_mask.y, ubuf.light_mask.w, ubuf.cc_amb[1], "
+      "ubuf.cc_amb[3], ubuf.cc_mat[1], ubuf.cc_mat[3], {3}, mv_pos, mv_nrm);",
+      (info.litPairs & 1) ? "gx_chan" : "gx_chan_unlit", (info.litPairs & 2) ? "gx_chan" : "gx_chan_unlit", clr0, clr1);
+
+  // Texgens.
+  std::string mtxIdx;
+  std::string srcCases;
+  u32 perVertexMtx = 0;
+  for (u32 i = 0; i < MaxTexCoord; ++i) {
+    const auto texAttr = static_cast<GXAttr>(GX_VA_TEX0 + i);
+    if (config.attrs[texAttr].attrType != GX_NONE) {
+      srcCases += fmt::format("\n            case {}u: {{ tc = vec4f({}, 1.0, 1.0); }}", underlying(GX_TG_TEX0) + i,
+                              vtx_attr(config, texAttr));
     }
-  } else if (cc.ambSrc == GX_SRC_REG) {
-    ambSrc = fmt::format("ubuf.cc{0}{1}_amb", i, alpha ? "a"sv : ""sv);
-  }
-  if (cc.matSrc == GX_SRC_VTX) {
-    if (UsePerPixelLighting) {
-      matSrc = fmt::format("in.clr{}", i);
-    } else {
-      matSrc = vtx_attr(config, static_cast<GXAttr>(GX_VA_CLR0 + i));
+    const auto mtxAttr = static_cast<GXAttr>(GX_VA_TEX0MTXIDX + i);
+    const bool perVertex = config.attrs[mtxAttr].attrType != GX_NONE;
+    if (perVertex) {
+      perVertexMtx |= 1u << i;
     }
-  } else if (cc.matSrc == GX_SRC_REG) {
-    matSrc = fmt::format("ubuf.cc{0}{1}_mat", i, alpha ? "a"sv : ""sv);
+    mtxIdx += fmt::format("{}{}", i ? ", " : "", perVertex ? vtx_attr(config, mtxAttr) : "0u"s);
   }
-  if (!cc.lightingEnabled) {
-    return fmt::format("\n    {0}{2} = {1}{2};", outVar, matSrc, swizzle);
+  if (perVertexMtx != 0) {
+    pre += fmt::format("\n    var tg_mi = array<u32, {}>({});", MaxTexCoord, mtxIdx);
   }
-  GXDiffuseFn diffFn = cc.diffFn;
-  std::string lightAttnFn;
-  if (cc.attnFn == GX_AF_NONE) {
-    lightAttnFn = "attn = 1.0;"s;
-  } else if (cc.attnFn == GX_AF_SPOT) {
-    lightAttnFn = fmt::format(R"""(
-          var cosine = max(0.0, dot(ldir, light.dir));
-          var cos_attn = dot(light.cos_att, vec3f(1.0, cosine, cosine * cosine));
-          var dist_attn = dot(light.dist_att, vec3f(1.0, dist, dist2));
-          attn = select(0.0, max(0.0, cos_attn / dist_attn), dist_attn > 1e-8);)""");
-  } else if (cc.attnFn == GX_AF_SPEC) {
-    std::string_view normal = UsePerPixelLighting ? "in.mv_nrm"sv : "mv_nrm"sv;
-    std::string dist_attn = diffFn != GX_DF_NONE
-                                ? "max(0.0, dot(normalize(light.dist_att), vec3f(1.0, attn, attn * attn)));"
-                                : "max(0.0, dot(light.dist_att, vec3f(1.0, attn, attn * attn)));";
-    lightAttnFn = fmt::format(R"""(
-          attn = select(0.0, max(0.0, dot({0}, light.dir)), dot({0}, ldir) >= 0.0);
-          var cos_attn = dot(light.cos_att, vec3f(1.0, attn, attn * attn));
-          var dist_attn = {1};
-          attn = select(0.0, max(0.0, cos_attn / dist_attn), dist_attn > 1e-8);)""",
-                              normal, dist_attn);
+  pre += fmt::format(
+      "\n    var tg_out: array<vec3f, {0}>;"
+      "\n    for (var i = 0u; i < min(ubuf.tg_count.x, {0}u); i++) {{"
+      "\n        let p = ubuf.tg[i];"
+      "\n        let kind = p.y & 0xffu;"
+      "\n        var t: vec3f;",
+      MaxTexCoord);
+  if (info.lightingEnabled) {
+    // Emboss: the source texcoord offset by the light direction projected onto tangent and binormal.
+    pre += fmt::format(
+        "\n        if (kind == {}u) {{"
+        "\n            let ldir = normalize(ubuf.lights[min(p.z, {}u)].pos - mv_pos);"
+        "\n            let bump_tan = vec4f(in_tangent, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
+        "\n            let bump_bin = vec4f(in_binrm, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
+        "\n            tg_out[i] = tg_out[min(p.x, {}u)] + vec3f(dot(ldir, bump_tan), dot(ldir, bump_bin), 0.0);"
+        "\n            continue;"
+        "\n        }}",
+        underlying(TgKindBump), GX::MaxLights - 1, MaxTexCoord - 1);
   }
-  std::string_view lightDiffFn;
-  if (diffFn == GX_DF_NONE) {
-    lightDiffFn = "1.0"sv;
-  } else if (diffFn == GX_DF_SIGN) {
-    if (UsePerPixelLighting) {
-      lightDiffFn = "dot(ldir, in.mv_nrm)"sv;
-    } else {
-      lightDiffFn = "dot(ldir, mv_nrm)"sv;
-    }
-  } else if (diffFn == GX_DF_CLAMP) {
-    if (UsePerPixelLighting) {
-      lightDiffFn = "max(0.0, dot(ldir, in.mv_nrm))"sv;
-    } else {
-      lightDiffFn = "max(0.0, dot(ldir, mv_nrm))"sv;
-    }
+  // Missing attributes read as GX defaults (vtx_attr): normal (1, 0, 0), colors zero; a missing
+  // texcoord, binormal or tangent source gives (0, 0, 1, 1).
+  srcCases = fmt::format("\n            case {}u: {{ tc = vec4f({}, 1.0); }}", underlying(GX_TG_POS),
+                         vtx_attr(config, GX_VA_POS)) +
+             fmt::format("\n            case {}u: {{ tc = vec4f({}, 1.0); }}", underlying(GX_TG_NRM),
+                         vtx_attr(config, GX_VA_NRM)) +
+             srcCases;
+  if (nrmAttr.attrType != GX_NONE && nrmAttr.cnt == 9) {
+    srcCases += fmt::format("\n            case {}u: {{ tc = vec4f(in_binrm, 1.0); }}"
+                            "\n            case {}u: {{ tc = vec4f(in_tangent, 1.0); }}",
+                            underlying(GX_TG_BINRM), underlying(GX_TG_TANGENT));
   }
-  return fmt::format(R"""(
-    {{
-      var lighting = {5};
-      for (var i = 0u; i < {1}u; i++) {{
-          if ((ubuf.lightState{0}{9} & (1u << i)) == 0u) {{ continue; }}
-          var light = ubuf.lights[i];
-          var ldir = light.pos - {6};
-          var dist2 = dot(ldir, ldir);
-          var dist = sqrt(dist2);
-          ldir = select(vec3f(0.0), ldir / dist, dist > 1e-10);
-          var attn: f32;{2}
-          var diff = {3};
-          lighting = lighting + (attn * diff * light.color);
-      }}
-      {7}{8} = ({4} * clamp(lighting, vec4f(0.0), vec4f(1.0))){8};
-    }})""",
-                     i, GX::MaxLights, lightAttnFn, lightDiffFn, matSrc, ambSrc, posVar, outVar, swizzle,
-                     alpha ? "a"sv : ""sv);
+  srcCases += fmt::format("\n            case {}u: {{ tc = {}; }}", underlying(GX_TG_COLOR0), clr0);
+  srcCases += fmt::format("\n            case {}u: {{ tc = {}; }}", underlying(GX_TG_COLOR1), clr1);
+  pre += fmt::format(
+      "\n        var tc = vec4f(0.0, 0.0, 1.0, 1.0);"
+      "\n        switch (p.x) {{{0}"
+      "\n            default: {{}}"
+      "\n        }}"
+      "\n        if (kind == {1}u) {{"
+      "\n            t = vec3f(tc.xy, 1.0);"
+      "\n        }} else {{",
+      srcCases, underlying(TgKindSrtg));
+  std::string matrixSel =
+      "\n            if (p.z == 0xffffu) {"
+      "\n                t = tc.xyz;"
+      "\n            } else {"
+      "\n                t = tc * ubuf.postex_mtx[min(p.z, " +
+      std::to_string(MaxPnMtx + MaxTexMtx - 1) +
+      "u)];"
+      "\n            }";
+  if (perVertexMtx != 0) {
+    pre += fmt::format(
+        "\n            if (({}u & (1u << i)) != 0u) {{"
+        "\n                t = tc * ubuf.postex_mtx[tg_mi[i] / 3u];"
+        "\n            }} else {{",
+        perVertexMtx);
+    pre += matrixSel;
+    pre += "\n            }";
+  } else {
+    pre += matrixSel;
+  }
+  pre += fmt::format(
+      "\n            if (kind == {}u) {{"
+      "\n                t.z = 1.0;"
+      "\n            }}"
+      "\n        }}"
+      "\n        if ((p.y & 0x100u) != 0u) {{"
+      "\n            t = normalize(t);"
+      "\n        }}"
+      "\n        t = vec4f(t, 1.0) * ubuf.tg_post[i];",
+      underlying(TgKindMtx2x4));
+  if (config.lineMode == 3) {
+    // GX_POINTS: offset S for right columns, T for bottom rows
+    pre +=
+        "\n        if ((ubuf.line_texcoord_mask & (1u << i)) != 0u) {"
+        "\n            if ((vidx & 1u) != 0u) { t.x += ubuf.line_tex_offset; }"
+        "\n            if (vidx >= 2u) { t.y += ubuf.line_tex_offset; }"
+        "\n        }";
+  } else if (config.lineMode != 0) {
+    // GX_LINES / GX_LINESTRIP: offset one axis for perpendicular side
+    pre +=
+        "\n        if ((ubuf.line_texcoord_mask & (1u << i)) != 0u && (vidx & 1u) != 0u) {"
+        "\n            t.x += ubuf.line_tex_offset;"
+        "\n        }";
+  }
+  pre += "\n        tg_out[i] = t;\n    }";
+  std::string texOut;
+  for (u32 i = 0; i < MaxTexCoord; ++i) {
+    pre += fmt::format("\n    out.tex{0}_uvw = tg_out[{0}];", i);
+    texOut += fmt::format("\n    @location({}) tex{}_uvw: vec3f,", 2 + i, i);
+  }
+
+  std::string lights;
+  std::string chanFn;
+  if (info.lightingEnabled) {
+    lights = fmt::format("\n    lights: array<Light, {}>,", GX::MaxLights);
+    chanFn = fmt::format(R"""(
+struct Light {{
+    pos: vec3f,
+    dir: vec3f,
+    color: vec4f,
+    cos_att: vec3f,
+    dist_att: vec3f,
+}};
+
+// Attenuation times diffuse term of one light for one channel (flags as in gx_chan).
+fn gx_light_scale(flags: u32, light: Light, ldir: vec3f, dist: f32, dist2: f32, nrm: vec3f) -> f32 {{
+    let diff_fn = (flags >> 4u) & 3u;
+    let attn_fn = (flags >> 8u) & 3u;
+    var attn = 1.0;
+    if (attn_fn == {1}u) {{
+        let cosine = max(0.0, dot(ldir, light.dir));
+        let cos_attn = dot(light.cos_att, vec3f(1.0, cosine, cosine * cosine));
+        let dist_attn = dot(light.dist_att, vec3f(1.0, dist, dist2));
+        attn = select(0.0, max(0.0, cos_attn / dist_attn), dist_attn > 1e-8);
+    }} else if (attn_fn == {2}u) {{
+        attn = select(0.0, max(0.0, dot(nrm, light.dir)), dot(nrm, ldir) >= 0.0);
+        let cos_attn = dot(light.cos_att, vec3f(1.0, attn, attn * attn));
+        let dist_att = select(light.dist_att, normalize(light.dist_att), diff_fn != {3}u);
+        let dist_attn = max(0.0, dot(dist_att, vec3f(1.0, attn, attn * attn)));
+        attn = select(0.0, max(0.0, cos_attn / dist_attn), dist_attn > 1e-8);
+    }}
+    var diff = 1.0;
+    if (diff_fn == {4}u) {{
+        diff = dot(ldir, nrm);
+    }} else if (diff_fn == {5}u) {{
+        diff = max(0.0, dot(ldir, nrm));
+    }}
+    return attn * diff;
+}}
+
+// One GX color channel pair: rgb from the COLOR channel (fc, mc), alpha from the ALPHA channel
+// (fa, ma), lit in one pass over the lights. Flags: bit 0 lighting, 1 material from vertex,
+// 2 ambient from vertex, bits 4-5 diffuse function, 8-9 attenuation function.
+fn gx_chan(fc: u32, fa: u32, mc: u32, ma: u32, amb_c: vec4f, amb_a: vec4f, mat_c: vec4f, mat_a: vec4f, vtx: vec4f,
+           pos: vec3f, nrm: vec3f) -> vec4f {{
+    let mat = vec4f(select(mat_c, vtx, (fc & 2u) != 0u).rgb, select(mat_a, vtx, (fa & 2u) != 0u).a);
+    let lit_c = (fc & 1u) != 0u;
+    let lit_a = (fa & 1u) != 0u;
+    if (!lit_c && !lit_a) {{
+        return mat;
+    }}
+    let use_c = select(0u, mc, lit_c);
+    let use_a = select(0u, ma, lit_a);
+    var lc = select(amb_c, vtx, (fc & 4u) != 0u).rgb;
+    var la = select(amb_a, vtx, (fa & 4u) != 0u).a;
+    for (var i = 0u; i < {0}u; i++) {{
+        let bit = 1u << i;
+        if (((use_c | use_a) & bit) == 0u) {{
+            continue;
+        }}
+        let light = ubuf.lights[i];
+        var ldir = light.pos - pos;
+        let dist2 = dot(ldir, ldir);
+        let dist = sqrt(dist2);
+        ldir = select(vec3f(0.0), ldir / dist, dist > 1e-10);
+        if ((use_c & bit) != 0u) {{
+            lc = lc + gx_light_scale(fc, light, ldir, dist, dist2, nrm) * light.color.rgb;
+        }}
+        if ((use_a & bit) != 0u) {{
+            la = la + gx_light_scale(fa, light, ldir, dist, dist2, nrm) * light.color.a;
+        }}
+    }}
+    let rgb = select(mat.rgb, mat.rgb * clamp(lc, vec3f(0.0), vec3f(1.0)), lit_c);
+    let alpha = select(mat.a, mat.a * clamp(la, 0.0, 1.0), lit_a);
+    return vec4f(rgb, alpha);
+}}
+)""",
+                         GX::MaxLights, underlying(GX_AF_SPOT), underlying(GX_AF_SPEC), underlying(GX_DF_NONE),
+                         underlying(GX_DF_SIGN), underlying(GX_DF_CLAMP));
+  }
+  // A channel pair that does not light: just the material colour, from the register or the vertex.
+  chanFn += R"""(
+fn gx_chan_unlit(fc: u32, fa: u32, mc: u32, ma: u32, amb_c: vec4f, amb_a: vec4f, mat_c: vec4f, mat_a: vec4f,
+                 vtx: vec4f, pos: vec3f, nrm: vec3f) -> vec4f {
+    return vec4f(select(mat_c, vtx, (fc & 2u) != 0u).rgb, select(mat_a, vtx, (fa & 2u) != 0u).a);
+}
+)""";
+
+  auto source = fmt::format(R"""({0}
+struct Immediate {{
+    vtx_start: u32,
+    current_pnmtx: u32,
+    fog_range_base: u32,
+    _pad: u32,
+    array_start0: vec4u,
+    array_start1: vec4u,
+    array_start2: vec4u,
+}};
+var<immediate> imm: Immediate;
+
+struct Uniform {{
+    render_viewport_size: vec2f,
+    logical_viewport_size: vec2f,
+    line_width: f32,
+    line_aspect_y: f32,
+    line_tex_offset: f32,
+    line_texcoord_mask: u32,
+    proj: mat4x4f,
+    depth_remap: vec4f,
+    postex_mtx: array<mat3x4f, {1}>,
+    nrm_mtx: array<mat3x4f, {2}>,
+    chan_flags: vec4u,
+    light_mask: vec4u,
+    tg_count: vec4u,
+    tg: array<vec4u, {3}>,
+    tg_post: array<mat3x4f, {3}>,
+    cc_amb: array<vec4f, 4>,
+    cc_mat: array<vec4f, 4>,{4}
+}};
+@group(0) @binding(0)
+var<storage, read> vbuf: array<u32>;
+@group(0) @binding(1)
+var<storage, read> abuf: array<u32>;
+@group(1) @binding(0)
+var<uniform> ubuf: Uniform;
+{5}
+struct VertexOutput {{
+    @builtin(position) pos: vec4f,
+    @location(0) cc0: vec4f,
+    @location(1) cc1: vec4f,{6}{7}{8}
+}};
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vidx: u32{9}
+) -> VertexOutput {{
+    var out: VertexOutput;{10}
+    return out;
+}}
+)""",
+                            GxHelpers, MaxPnMtx + MaxTexMtx, MaxPnMtx, MaxTexCoord, lights, chanFn, texOut,
+                            vtxOutAttrs, vtxClipOut, vtxInAttrs, pre);
+  if (webgpu::g_gxClipEmulationSupported) {
+    source.insert(0, "enable clip_distances;\n");
+  }
+  return source;
 }
 
 absl::flat_hash_set<gfx::ShaderRef> s_seenShaders;
 } // namespace
 
-std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
-                                uint32_t normalAttachment) noexcept {
+// SFA-NX: returns the vertex and fragment WGSL separately. The vertex source comes from build_vertex_source
+// and depends on far less of the config than the fragment source, so the shader caches (keyed by the WGSL)
+// share it between pipelines.
+GXShaderSources build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
+                                    uint32_t normalAttachment) noexcept {
   ZoneScoped;
   const auto hash = xxh3_hash(dstAlphaMode, xxh3_hash(normalAttachment, xxh3_hash(config)));
   const auto info = build_shader_info(config);
@@ -834,142 +1466,16 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   std::string uniformPre;
   std::string uniBufAttrs;
   std::string texBindings;
-  std::string vtxOutAttrs;
-  std::string vtxInAttrs;
-  std::string vtxXfrAttrsPre;
-  std::string vtxXfrAttrs;
-  size_t vtxOutIdx = 0;
-
-  // Load points for line/point expansion
-  std::string_view vidxAttr = "vidx"sv;
-  if (config.lineMode != 0) {
-    vtxInAttrs += ",\n    @builtin(instance_index) iidx: u32";
-    uniBufAttrs +=
-        "\n    line_width: f32,"
-        "\n    line_aspect_y: f32,"
-        "\n    line_tex_offset: f32,"
-        "\n    line_texcoord_mask: u32,";
-    if (config.lineMode == 3) {
-      // GX_POINTS: each instance = one vertex, expand to quad
-      vtxXfrAttrsPre += fmt::format(
-          "\n    let in_vidx = iidx;"
-          "\n    let in_pos = {};"
-          "\n    let in_pnmtxidx = {};"
-          "\n    let mv_pos = vec4f(in_pos, 1.0) * ubuf.postex_mtx[in_pnmtxidx];",
-          attr_load(config, GX_VA_POS, "in_vidx"sv), attr_load(config, GX_VA_PNMTXIDX, "in_vidx"sv));
-    } else {
-      // GX_LINES / GX_LINESTRIP: each instance = two vertices, expand to quad
-      vtxXfrAttrsPre += fmt::format(
-          "\n    let use_b = vidx >= 2u;"
-          "\n    let vidx_a = iidx * {}u;"
-          "\n    let vidx_b = vidx_a + 1u;"
-          "\n    let in_vidx = select(vidx_a, vidx_b, use_b);"
-          "\n    let pos_a = {};"
-          "\n    let pos_b = {};"
-          "\n    let in_pos = select(pos_a, pos_b, use_b);"
-          "\n    let pnmtxidx_a = {};"
-          "\n    let pnmtxidx_b = {};"
-          "\n    let in_pnmtxidx = select(pnmtxidx_a, pnmtxidx_b, use_b);"
-          "\n    let mv_pos_a = vec4f(pos_a, 1.0) * ubuf.postex_mtx[pnmtxidx_a];"
-          "\n    let mv_pos_b = vec4f(pos_b, 1.0) * ubuf.postex_mtx[pnmtxidx_b];"
-          "\n    let mv_pos = select(mv_pos_a, mv_pos_b, use_b);",
-          config.lineMode == 1 ? 2 : 1, attr_load(config, GX_VA_POS, "vidx_a"sv),
-          attr_load(config, GX_VA_POS, "vidx_b"sv), attr_load(config, GX_VA_PNMTXIDX, "vidx_a"sv),
-          attr_load(config, GX_VA_PNMTXIDX, "vidx_b"sv));
-    }
-    vidxAttr = "in_vidx"sv;
-  } else if (config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE) {
-    vtxXfrAttrsPre += "\n    let in_pnmtxidx = imm.current_pnmtx;";
-  }
-
-  // Load vertex attributes
-  for (GXAttr attr = GX_VA_PNMTXIDX; attr <= GX_VA_TEX7; attr = static_cast<GXAttr>(attr + 1)) {
-    const auto attrType = config.attrs[attr].attrType;
-    if (attrType == GX_NONE) {
-      continue;
-    }
-    // in_pnmtxidx and in_pos written above for line mode
-    if ((attr != GX_VA_PNMTXIDX && attr != GX_VA_POS) || config.lineMode == 0) {
-      vtxXfrAttrsPre += fmt::format("\n    let {} = {};", vtx_attr(config, attr), attr_load(config, attr, vidxAttr));
-    }
-  }
-  bool needsBinrm = false;
-  bool needsTangent = false;
-  for (int i = 0; i < info.sampledTexCoords.size(); ++i) {
-    if (!info.sampledTexCoords.test(i)) {
-      continue;
-    }
-    const bool emboss = is_emboss_texgen(config.tcgs[i].type);
-    needsBinrm = needsBinrm || config.tcgs[i].src == GX_TG_BINRM || emboss;
-    needsTangent = needsTangent || config.tcgs[i].src == GX_TG_TANGENT || emboss;
-  }
-  if (needsBinrm) {
-    vtxXfrAttrsPre += fmt::format("\n    let {} = {};", nbt_slice_local(NbtSlice::B),
-                                  attr_load_nbt_slice(config, NbtSlice::B, vidxAttr));
-  }
-  if (needsTangent) {
-    vtxXfrAttrsPre += fmt::format("\n    let {} = {};", nbt_slice_local(NbtSlice::T),
-                                  attr_load_nbt_slice(config, NbtSlice::T, vidxAttr));
-  }
-
-  if (config.lineMode == 0) {
-    vtxXfrAttrsPre += fmt::format(
-        "\n    let mv_pos = vec4f({}, 1.0) * ubuf.postex_mtx[in_pnmtxidx];"
-        "\n    out.pos = vec4f(mv_pos, 1.0) * ubuf.proj;",
-        vtx_attr(config, GX_VA_POS));
-  } else if (config.lineMode == 3) {
-    // GX_POINTS: expand single vertex to axis-aligned screen-space square
-    vtxXfrAttrsPre +=
-        "\n    let clip = vec4f(mv_pos, 1.0) * ubuf.proj;"
-        "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
-        "\n    let point_size = ubuf.line_width * min(viewport_scale.x, viewport_scale.y);"
-        "\n    let x_sign = select(-1.0, 1.0, (vidx & 1u) != 0u);"
-        "\n    let y_sign = select(-1.0, 1.0, vidx >= 2u);"
-        "\n    let offset_px = vec2f(x_sign, y_sign) * (point_size / 2.0);"
-        "\n    let offset_ndc = (offset_px * 2.0) / ubuf.render_viewport_size;"
-        "\n    out.pos = vec4f(clip.xy + offset_ndc * clip.w, clip.zw);";
-  } else {
-    // GX_LINES / GX_LINESTRIP: expand line segment perpendicular to direction
-    vtxXfrAttrsPre +=
-        "\n    let clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
-        "\n    let clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
-        "\n    let ndc_a = clip_a.xy / clip_a.w;"
-        "\n    let ndc_b = clip_b.xy / clip_b.w;"
-        "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
-        "\n    let delta_px = (ndc_b - ndc_a) / 2.0 * ubuf.render_viewport_size;"
-        "\n    let dir_px = select(vec2f(1.0, 0.0), normalize(delta_px), dot(delta_px, delta_px) > 1e-10);"
-        "\n    let perp_px = vec2f(-dir_px.y, dir_px.x);"
-        "\n    let line_width = ubuf.line_width * min(viewport_scale.x, viewport_scale.y);"
-        "\n    let offset_px = perp_px * (line_width / 2.0) * select(-1.0, 1.0, (vidx & 1u) != 0u);"
-        "\n    let offset_ndc = (offset_px * 2.0) / ubuf.render_viewport_size;"
-        "\n    let clip_base = select(clip_a, clip_b, use_b);"
-        "\n    out.pos = vec4f(clip_base.xy + offset_ndc * clip_base.w, clip_base.zw);";
-  }
-  std::string vtxClipOut;
-  if (webgpu::g_gxClipEmulationSupported) {
-    vtxClipOut = "\n    @builtin(clip_distances) clip_dist: array<f32, 2>,";
-    vtxXfrAttrsPre +=
-        "\n    let gx_clip_z = (out.pos.z - out.pos.w * ubuf.depth_remap.y) / ubuf.depth_remap.x;"
-        "\n    out.clip_dist = array<f32, 2>(gx_clip_z, out.pos.w - gx_clip_z);";
-  }
-  vtxXfrAttrsPre += fmt::format(
-      "\n    let nrm_tmp = vec4f({}, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
-      "\n    let mv_nrm = select(nrm_tmp, normalize(nrm_tmp), dot(nrm_tmp, nrm_tmp) > 1e-10);",
-      vtx_attr(config, GX_VA_NRM));
-  if constexpr (EnableNormalVisualization) {
-    vtxOutAttrs += fmt::format("\n    @location({}) nrm: vec3f,", vtxOutIdx++);
-    vtxXfrAttrsPre += "\n    out.nrm = mv_nrm;";
-  }
+  std::string fragInAttrs;
+  static_assert(!UsePerPixelLighting, "the generic vertex shader lights per vertex");
   const bool useNormalTarget = normalAttachment != UINT32_MAX && config.attrs[GX_VA_NRM].attrType != GX_NONE;
-  if (useNormalTarget && !(UsePerPixelLighting && info.lightingEnabled)) {
-    vtxOutAttrs += fmt::format("\n    @location({}) mv_nrm: vec3f,", vtxOutIdx++);
-    vtxXfrAttrsPre += "\n    out.mv_nrm = mv_nrm;";
+  auto vertexSource = build_vertex_source(config, info, useNormalTarget);
+  if constexpr (EnableNormalVisualization) {
+    fragInAttrs += "\n    @location(11) nrm: vec3f,";
   }
-
-  uniBufAttrs += "\n    proj: mat4x4f,";
-  uniBufAttrs += "\n    depth_remap: vec4f,";
-  uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,", MaxPnMtx + MaxTexMtx);
-  uniBufAttrs += fmt::format("\n    nrm_mtx: array<mat3x4f, {}>,", MaxPnMtx);
+  if (useNormalTarget) {
+    fragInAttrs += "\n    @location(10) mv_nrm: vec3f,";
+  }
   std::string fragmentFnPre;
   std::string fragmentFn;
 
@@ -1035,69 +1541,9 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     }
   }
 
-  if (info.lightingEnabled) {
-    uniBufAttrs += fmt::format(FMT_STRING(R"""(
-    lights: array<Light, {}>,
-    lightState0: u32,
-    lightState1: u32,
-    lightState0a: u32,
-    lightState1a: u32,)"""),
-                               GX::MaxLights);
-    uniformPre +=
-        "\n"
-        "struct Light {\n"
-        "    pos: vec3f,\n"
-        "    dir: vec3f,\n"
-        "    color: vec4f,\n"
-        "    cos_att: vec3f,\n"
-        "    dist_att: vec3f,\n"
-        "};";
-    if (UsePerPixelLighting) {
-      vtxOutAttrs += fmt::format("\n    @location({}) mv_pos: vec3f,", vtxOutIdx++);
-      vtxOutAttrs += fmt::format("\n    @location({}) mv_nrm: vec3f,", vtxOutIdx++);
-      vtxXfrAttrs += fmt::format(FMT_STRING(R"""(
-    out.mv_pos = mv_pos;
-    out.mv_nrm = mv_nrm;)"""));
-    }
-  }
-
   for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
-    if (!info.sampledColorChannels.test(i)) {
-      continue;
-    }
-
-    const auto& cc = config.colorChannels[i];
-    const auto& cca = config.colorChannels[i + GX_ALPHA0];
-    if (cc.lightingEnabled && cc.ambSrc == GX_SRC_REG) {
-      uniBufAttrs += fmt::format("\n    cc{0}_amb: vec4f,", i);
-    }
-    if (cc.matSrc == GX_SRC_REG) {
-      uniBufAttrs += fmt::format("\n    cc{0}_mat: vec4f,", i);
-    }
-    if (cca.lightingEnabled && cca.ambSrc == GX_SRC_REG) {
-      uniBufAttrs += fmt::format("\n    cc{0}a_amb: vec4f,", i);
-    }
-    if (cca.matSrc == GX_SRC_REG) {
-      uniBufAttrs += fmt::format("\n    cc{0}a_mat: vec4f,", i);
-    }
-
-    // Output vertex color if necessary
-    if (UsePerPixelLighting) {
-      if ((cc.lightingEnabled && cc.ambSrc == GX_SRC_VTX) || cc.matSrc == GX_SRC_VTX ||
-          (cca.lightingEnabled && cca.ambSrc == GX_SRC_VTX) || cca.matSrc == GX_SRC_VTX) {
-        vtxOutAttrs += fmt::format("\n    @location({}) clr{}: vec4f,", vtxOutIdx++, i);
-        vtxXfrAttrs += fmt::format("\n    out.clr{} = {};", i, vtx_attr(config, static_cast<GXAttr>(GX_VA_CLR0 + i)));
-      }
-    }
-
-    if (UsePerPixelLighting) {
-      fragmentFnPre += fmt::format("\n    var rast{}: vec4f;", i);
-      fragmentFnPre += lighting_func(config, cc, i, false);
-      fragmentFnPre += lighting_func(config, cca, i, true);
-    } else {
-      vtxOutAttrs += fmt::format("\n    @location({}) cc{}: vec4f,", vtxOutIdx++, i);
-      vtxXfrAttrs += lighting_func(config, cc, i, false);
-      vtxXfrAttrs += lighting_func(config, cca, i, true);
+    if (info.sampledColorChannels.test(i)) {
+      fragInAttrs += fmt::format("\n    @location({0}) cc{0}: vec4f,", i);
       fragmentFnPre += fmt::format("\n    var rast{0} = in.cc{0};", i);
     }
   }
@@ -1106,92 +1552,13 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
       uniBufAttrs += fmt::format("\n    konst{}: vec4f,", i);
     }
   }
+  // GX carries S, T and Q to the TEV unit for every texgen (see build_vertex_source).
   for (int i = 0; i < info.sampledTexCoords.size(); ++i) {
-    if (!info.sampledTexCoords.test(i)) {
-      continue;
-    }
-    const auto& tcg = config.tcgs[i];
-    // GX carries S, T and Q to the TEV unit for every texgen. Even an ST
-    // (MTX2x4) texgen can acquire a non-unit Q from normalization followed by
-    // its post-transform, so retaining Q only for MTX3x4 loses projective
-    // texture coordinates.
-    vtxOutAttrs += fmt::format("\n    @location({}) tex{}_uvw: vec3f,", vtxOutIdx++, i);
-    if (is_emboss_texgen(tcg.type)) {
-      // Emboss bump: offset the source texcoord by the light projected onto tangent/binormal
-      const u32 lightIdx = tcg.type - GX_TG_BUMP0;
-      vtxXfrAttrs += fmt::format(
-          "\n    let bump_ldir{0} = normalize(ubuf.lights[{1}].pos - mv_pos);"
-          "\n    let bump_tan{0} = vec4f(in_tangent, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
-          "\n    let bump_bin{0} = vec4f(in_binrm, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
-          "\n    out.tex{0}_uvw = tc{2}_proj.xyz + vec3f(dot(bump_ldir{0}, bump_tan{0}), dot(bump_ldir{0}, "
-          "bump_bin{0}), 0.0);",
-          i, lightIdx, tcg.embossSrc);
+    if (info.sampledTexCoords.test(i)) {
+      fragInAttrs += fmt::format("\n    @location({}) tex{}_uvw: vec3f,", 2 + i, i);
       fragmentFnPre += fmt::format(
           "\n    var tex{0}_uv = in.tex{0}_uvw.xy / select(in.tex{0}_uvw.z, 1.0, in.tex{0}_uvw.z == 0.0);", i);
-      continue;
     }
-    if (tcg.src >= GX_TG_TEX0 && tcg.src <= GX_TG_TEX7) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0, 1.0);", i,
-                                 vtx_attr(config, GXAttr(GX_VA_TEX0 + (tcg.src - GX_TG_TEX0))));
-    } else if (tcg.src == GX_TG_POS) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_POS));
-    } else if (tcg.src == GX_TG_NRM) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, vtx_attr(config, GX_VA_NRM));
-    } else if (tcg.src == GX_TG_COLOR0) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = {};", i, vtx_attr(config, GX_VA_CLR0));
-    } else if (tcg.src == GX_TG_COLOR1) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = {};", i, vtx_attr(config, GX_VA_CLR1));
-    } else if (tcg.src == GX_TG_BINRM) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, nbt_slice_local(NbtSlice::B));
-    } else if (tcg.src == GX_TG_TANGENT) {
-      vtxXfrAttrs += fmt::format("\n    var tc{} = vec4f({}, 1.0);", i, nbt_slice_local(NbtSlice::T));
-    } else
-      UNLIKELY FATAL("unhandled tcg src {}", underlying(tcg.src));
-    if (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) {
-      if (info.indexAttr.test(GX_VA_TEX0MTXIDX + i)) {
-        vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[in_texmtxidx{0} / 3u];", i);
-      } else if (tcg.mtx == GX_IDENTITY) {
-        vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0}.xyz;", i);
-      } else {
-        u32 texMtxIdx = (tcg.mtx) / 3;
-        vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[{1}];", i, texMtxIdx);
-      }
-      if (tcg.type == GX_TG_MTX2x4) {
-        vtxXfrAttrs += fmt::format("\n    tc{0}_tmp.z = 1.0f;", i);
-      }
-    } else if (tcg.type == GX_TG_SRTG) {
-      vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = vec3f(tc{0}.xy, 1.0f);", i);
-    }
-    if (tcg.normalize) {
-      vtxXfrAttrs += fmt::format("\n    tc{0}_tmp = normalize(tc{0}_tmp);", i);
-    }
-    if (tcg.postMtx == GX_PTIDENTITY) {
-      vtxXfrAttrs += fmt::format("\n    var tc{0}_proj = tc{0}_tmp;", i);
-    } else {
-      u32 postMtxIdx = (tcg.postMtx - GX_PTTEXMTX0) / 3;
-      vtxXfrAttrs +=
-          fmt::format("\n    var tc{0}_proj = vec4f(tc{0}_tmp.xyz, 1.0) * ubuf.postmtx[{1}];", i, postMtxIdx);
-    }
-    // Apply line/point tex offset
-    if (config.lineMode == 3) {
-      // GX_POINTS: offset S for right columns, T for bottom rows
-      vtxXfrAttrs += fmt::format(
-          "\n    if ((ubuf.line_texcoord_mask & (1u << {0})) != 0u) {{"
-          "\n        if ((vidx & 1u) != 0u) {{ tc{0}_proj.x += ubuf.line_tex_offset; }}"
-          "\n        if (vidx >= 2u) {{ tc{0}_proj.y += ubuf.line_tex_offset; }}"
-          "\n    }}",
-          i);
-    } else if (config.lineMode != 0) {
-      // GX_LINES / GX_LINESTRIP: offset one axis for perpendicular side
-      vtxXfrAttrs += fmt::format(
-          "\n    if ((ubuf.line_texcoord_mask & (1u << {0})) != 0u && (vidx & 1u) != 0u) {{"
-          "\n        tc{0}_proj.x += ubuf.line_tex_offset;"
-          "\n    }}",
-          i);
-    }
-    vtxXfrAttrs += fmt::format("\n    out.tex{0}_uvw = tc{0}_proj.xyz;", i);
-    fragmentFnPre += fmt::format(
-        "\n    var tex{0}_uv = in.tex{0}_uvw.xy / select(in.tex{0}_uvw.z, 1.0, in.tex{0}_uvw.z == 0.0);", i);
   }
   // Multiple TEV stages may reference the same indirect stage,
   // so we sample each indirect texture only once.
@@ -1418,9 +1785,6 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
         "ubuf.tex{1}_size_bias.z)) / 255.0;",
         i, underlying(stage.texMapId), uvIn);
   }
-  if (info.usesPTTexMtx.any()) {
-    uniBufAttrs += fmt::format("\n    postmtx: array<mat3x4f, {}>,", MaxPTTexMtx);
-  }
   if (info.usesFog) {
     uniformPre +=
         "\n"
@@ -1566,336 +1930,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     fragmentReturn = "\n    return FragmentOutput(vec4f(prev.rgb, 1.0), prev);";
   }
 
-  auto shaderSource =
-      fmt::format(R"""(
-fn bswap32(v: u32, le: bool) -> u32 {{
-  if (le) {{
-    return v;
-  }}
-  return ((v & 0x000000FFu) << 24u) |
-         ((v & 0x0000FF00u) << 8u) |
-         ((v & 0x00FF0000u) >> 8u) |
-         ((v & 0xFF000000u) >> 24u);
-}}
-
-fn bswap16(v: u32, le: bool) -> u32 {{
-  return select(((v & 0xFFu) << 8u) | (v >> 8u), v, le);
-}}
-
-fn load_word(p: ptr<storage, array<u32>>, word_idx: u32) -> u32 {{
-  // This guard is not expected to handle routine out-of-bounds accesses.
-  // It appears to discourage some Adreno drivers/optimizers from storage buffer
-  // optimizations that can cause visual artifacts, including vertex explosions
-  // in Dusklight.
-  if (word_idx < arrayLength(p)) {{
-    return p[word_idx];
-  }}
-  return 0u;
-}}
-
-fn load_u8(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
-  let word = load_word(p, byte_off / 4u);
-  let shift = (byte_off & 3u) * 8u;
-  return (word >> shift) & 0xFFu;
-}}
-
-fn load_u32_raw(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
-  let word_idx = byte_off >> 2u;
-  let sub = byte_off & 3u;
-  let lo = load_word(p, word_idx);
-  if (sub == 0u) {{
-    return lo;
-  }}
-  let hi = load_word(p, word_idx + 1u);
-  let shift = sub * 8u;
-  return (lo >> shift) | (hi << (32u - shift));
-}}
-
-fn load_u16(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {{
-  let word_idx = byte_off >> 2u;
-  let sub = byte_off & 3u;
-  let word = load_word(p, word_idx);
-  if (sub <= 2u) {{
-    return bswap16(extractBits(word, sub * 8u, 16u), le);
-  }}
-  let next = load_word(p, word_idx + 1u);
-  let raw = extractBits(word, 24u, 8u) | (extractBits(next, 0u, 8u) << 8u);
-  return bswap16(raw, le);
-}}
-
-fn load_u24(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {{
-  let raw = load_u32_raw(p, byte_off) & 0x00FFFFFFu;
-  if (le) {{
-    return raw;
-  }}
-  return ((raw & 0x0000FFu) << 16u) |
-         (raw & 0x00FF00u) |
-         ((raw & 0xFF0000u) >> 16u);
-}}
-
-fn load_u32(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {{
-  return bswap32(load_u32_raw(p, byte_off), le);
-}}
-
-fn load_f32(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> f32 {{
-  return bitcast<f32>(load_u32(p, byte_off, le));
-}}
-
-fn raw_fetch_u8_1(p: ptr<storage, array<u32>>, byte_off: u32) -> u32 {{
-  return load_u8(p, byte_off);
-}}
-
-fn raw_fetch_u8_2(p: ptr<storage, array<u32>>, byte_off: u32) -> vec2u {{
-  let word_idx = byte_off >> 2u;
-  let sub = byte_off & 3u;
-  let word = load_word(p, word_idx);
-  if (sub <= 2u) {{
-    let shift = sub * 8u;
-    return vec2u(
-      extractBits(word, shift + 0u, 8u),
-      extractBits(word, shift + 8u, 8u),
-    );
-  }}
-  let next = load_word(p, word_idx + 1u);
-  return vec2u(
-    extractBits(word, 24u, 8u),
-    extractBits(next, 0u, 8u),
-  );
-}}
-
-fn raw_fetch_u8_3(p: ptr<storage, array<u32>>, byte_off: u32) -> vec3u {{
-  let raw = load_u32_raw(p, byte_off);
-  return vec3u(
-    extractBits(raw, 0u, 8u),
-    extractBits(raw, 8u, 8u),
-    extractBits(raw, 16u, 8u),
-  );
-}}
-
-fn raw_fetch_u8_4(p: ptr<storage, array<u32>>, byte_off: u32) -> vec4u {{
-  let raw = load_u32_raw(p, byte_off);
-  return vec4u(
-    extractBits(raw, 0u, 8u),
-    extractBits(raw, 8u, 8u),
-    extractBits(raw, 16u, 8u),
-    extractBits(raw, 24u, 8u),
-  );
-}}
-
-fn raw_fetch_u16_1(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> u32 {{
-  return load_u16(p, byte_off, le);
-}}
-
-fn raw_fetch_u16_2(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec2u {{
-  return vec2u(
-    load_u16(p, byte_off + 0u, le),
-    load_u16(p, byte_off + 2u, le),
-  );
-}}
-
-fn raw_fetch_u16_3(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec3u {{
-  return vec3u(
-    load_u16(p, byte_off + 0u, le),
-    load_u16(p, byte_off + 2u, le),
-    load_u16(p, byte_off + 4u, le),
-  );
-}}
-
-fn raw_fetch_u16_4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4u {{
-  return vec4u(
-    load_u16(p, byte_off + 0u, le),
-    load_u16(p, byte_off + 2u, le),
-    load_u16(p, byte_off + 4u, le),
-    load_u16(p, byte_off + 6u, le),
-  );
-}}
-
-fn raw_fetch_f32_1(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> f32 {{
-  return load_f32(p, byte_off, le);
-}}
-
-fn raw_fetch_f32_2(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec2f {{
-  return vec2f(
-    load_f32(p, byte_off + 0u, le),
-    load_f32(p, byte_off + 4u, le),
-  );
-}}
-
-fn raw_fetch_f32_3(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec3f {{
-  return vec3f(
-    load_f32(p, byte_off + 0u, le),
-    load_f32(p, byte_off + 4u, le),
-    load_f32(p, byte_off + 8u, le),
-  );
-}}
-
-fn raw_fetch_f32_4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  return vec4f(
-    load_f32(p, byte_off + 0u, le),
-    load_f32(p, byte_off + 4u, le),
-    load_f32(p, byte_off + 8u, le),
-    load_f32(p, byte_off + 12u, le),
-  );
-}}
-
-fn fetch_u8_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {{
-  let v = raw_fetch_u8_1(p, byte_off);
-  return f32(v) / f32(1u << frac);
-}}
-
-fn fetch_s8_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {{
-  let v = (bitcast<i32>(raw_fetch_u8_1(p, byte_off)) << 24) >> 24;
-  return f32(v) / f32(1u << frac);
-}}
-
-fn fetch_u8_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {{
-  let v = raw_fetch_u8_2(p, byte_off);
-  return vec2f(v) / f32(1u << frac);
-}}
-
-fn fetch_s8_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {{
-  let v = (bitcast<vec2i>(raw_fetch_u8_2(p, byte_off)) << vec2u(24u)) >> vec2u(24u);
-  return vec2f(v) / f32(1u << frac);
-}}
-
-fn fetch_u8_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {{
-  let v = raw_fetch_u8_3(p, byte_off);
-  return vec3f(v) / f32(1u << frac);
-}}
-
-fn fetch_s8_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {{
-  let v = (bitcast<vec3i>(raw_fetch_u8_3(p, byte_off)) << vec3u(24u)) >> vec3u(24u);
-  return vec3f(v) / f32(1u << frac);
-}}
-
-fn fetch_u8_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {{
-  let v = raw_fetch_u8_4(p, byte_off);
-  return vec4f(v) / f32(1u << frac);
-}}
-
-fn fetch_s8_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {{
-  let v = (bitcast<vec4i>(raw_fetch_u8_4(p, byte_off)) << vec4u(24u)) >> vec4u(24u);
-  return vec4f(v) / f32(1u << frac);
-}}
-
-fn fetch_u16_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {{
-  let v = raw_fetch_u16_1(p, byte_off, le);
-  return f32(v) / f32(1u << frac);
-}}
-
-fn fetch_s16_1(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> f32 {{
-  let v = bitcast<i32>(raw_fetch_u16_1(p, byte_off, le) << 16u) >> 16;
-  return f32(v) / f32(1u << frac);
-}}
-
-fn fetch_u16_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {{
-  let v = raw_fetch_u16_2(p, byte_off, le);
-  return vec2f(v) / f32(1u << frac);
-}}
-
-fn fetch_s16_2(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec2f {{
-  let v = (bitcast<vec2i>(raw_fetch_u16_2(p, byte_off, le)) << vec2u(16u)) >> vec2u(16u);
-  return vec2f(v) / f32(1u << frac);
-}}
-
-fn fetch_u16_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {{
-  let v = raw_fetch_u16_3(p, byte_off, le);
-  return vec3f(v) / f32(1u << frac);
-}}
-
-fn fetch_s16_3(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec3f {{
-  let v = (bitcast<vec3i>(raw_fetch_u16_3(p, byte_off, le)) << vec3u(16u)) >> vec3u(16u);
-  return vec3f(v) / f32(1u << frac);
-}}
-
-fn fetch_u16_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {{
-  let v = raw_fetch_u16_4(p, byte_off, le);
-  return vec4f(v) / f32(1u << frac);
-}}
-
-fn fetch_s16_4(p: ptr<storage, array<u32>>, byte_off: u32, frac: u32, le: bool) -> vec4f {{
-  let v = (bitcast<vec4i>(raw_fetch_u16_4(p, byte_off, le)) << vec4u(16u)) >> vec4u(16u);
-  return vec4f(v) / f32(1u << frac);
-}}
-
-fn fetch_f32_1(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> f32 {{
-  return raw_fetch_f32_1(p, byte_off, le);
-}}
-
-fn fetch_f32_2(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec2f {{
-  return raw_fetch_f32_2(p, byte_off, le);
-}}
-
-fn fetch_f32_3(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec3f {{
-  return raw_fetch_f32_3(p, byte_off, le);
-}}
-
-fn fetch_f32_4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  return raw_fetch_f32_4(p, byte_off, le);
-}}
-
-fn fetch_rgb565(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  let v = load_u16(p, byte_off, le);
-  return vec4f(
-    f32((v >> 11u) & 0x1Fu) / f32(0x1Fu),
-    f32((v >>  5u) & 0x3Fu) / f32(0x3Fu),
-    f32((v >>  0u) & 0x1Fu) / f32(0x1Fu),
-    1.0,
-  );
-}}
-
-fn fetch_rgb8(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  let v = raw_fetch_u8_3(p, byte_off);
-  return vec4f(f32(v.x), f32(v.y), f32(v.z), 255.0) / 255.0;
-}}
-
-fn fetch_rgbx8(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  let v = raw_fetch_u8_4(p, byte_off);
-  return vec4f(f32(v.x), f32(v.y), f32(v.z), 255.0) / 255.0;
-}}
-
-fn fetch_rgba4(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  let v = load_u16(p, byte_off, le);
-  return vec4f(
-    f32((v >> 12u) & 0x0Fu) / f32(0x0Fu),
-    f32((v >>  8u) & 0x0Fu) / f32(0x0Fu),
-    f32((v >>  4u) & 0x0Fu) / f32(0x0Fu),
-    f32((v >>  0u) & 0x0Fu) / f32(0x0Fu),
-  );
-}}
-
-fn fetch_rgba6(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  let v = load_u24(p, byte_off, le);
-  return vec4f(
-    f32((v >> 18u) & 0x3Fu) / f32(0x3Fu),
-    f32((v >> 12u) & 0x3Fu) / f32(0x3Fu),
-    f32((v >>  6u) & 0x3Fu) / f32(0x3Fu),
-    f32((v >>  0u) & 0x3Fu) / f32(0x3Fu),
-  );
-}}
-
-fn fetch_rgba8(p: ptr<storage, array<u32>>, byte_off: u32, le: bool) -> vec4f {{
-  let v = raw_fetch_u8_4(p, byte_off);
-  return vec4f(v) / 255.0;
-}}
-
-fn tev_overflow_f32(in: f32) -> f32 {{
-  let byte_space = in * 255.0;
-  return (byte_space - floor(byte_space / 256.0) * 256.0) / 255.0;
-}}
-
-fn tev_overflow_vec3f(in: vec3f) -> vec3f {{
-  let byte_space = in * 255.0;
-  return (byte_space - floor(byte_space / 256.0) * 256.0) / 255.0;
-}}
-
-fn tev_overflow_vec4f(in: vec4f) -> vec4f {{
-  let byte_space = in * 255.0;
-  return (byte_space - floor(byte_space / 256.0) * 256.0) / 255.0;
-}}
-
-{8}
-
+  auto fragmentSource = fmt::format(R"""({0}{1}
 struct Immediate {{
     vtx_start: u32,
     current_pnmtx: u32,
@@ -1908,54 +1943,39 @@ struct Immediate {{
 var<immediate> imm: Immediate;
 
 struct Uniform {{
-    render_viewport_size: vec2f,
-    logical_viewport_size: vec2f,{0}
+    vtx_part: array<vec4f, {2}>,{3}
 }};
 @group(0) @binding(0)
 var<storage, read> vbuf: array<u32>;
 @group(0) @binding(1)
 var<storage, read> abuf: array<u32>;
 @group(1) @binding(0)
-var<uniform> ubuf: Uniform;{1}
-
-struct VertexOutput {{
-    @builtin(position) pos: vec4f,{2}{12}
-}};
+var<uniform> ubuf: Uniform;{4}
 
 struct FragmentInput {{
-    @builtin(position) pos: vec4f,{2}
+    @builtin(position) pos: vec4f,{5}
 }};
-
-@vertex
-fn vs_main(
-    @builtin(vertex_index) vidx: u32{3}
-) -> VertexOutput {{
-    var out: VertexOutput;{7}{4}
-    return out;
-}}
-
-{9}
+{6}
 @fragment
-fn fs_main(in: FragmentInput) -> {10} {{{6}{5}{11}
+fn fs_main(in: FragmentInput) -> {7} {{{8}{9}{10}
 }}
 )""",
-                  uniBufAttrs, texBindings, vtxOutAttrs, vtxInAttrs, vtxXfrAttrs, fragmentFn, fragmentFnPre,
-                  vtxXfrAttrsPre, uniformPre, fragmentOutput, fragmentOutputType, fragmentReturn, vtxClipOut);
+                                    GxHelpers, uniformPre, info.vtxUniformSize / 16, uniBufAttrs, texBindings,
+                                    fragInAttrs, fragmentOutput, fragmentOutputType, fragmentFnPre, fragmentFn,
+                                    fragmentReturn);
   if (dstAlphaMode == DstAlphaMode::DualSource) {
-    shaderSource.insert(0, "enable dual_source_blending;\n");
-  }
-  if (webgpu::g_gxClipEmulationSupported) {
-    shaderSource.insert(0, "enable clip_distances;\n");
+    fragmentSource.insert(0, "enable dual_source_blending;\n");
   }
   if (EnableDebugPrints) {
-    Log.info("Generated shader (hash {:x}): {}", hash, shaderSource);
+    Log.info("Generated shader (hash {:x}): {}\n{}", hash, vertexSource, fragmentSource);
   }
 
-  return shaderSource;
+  return {std::move(vertexSource), std::move(fragmentSource)};
 }
 
-wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
-                                DstAlphaMode dstAlphaMode) noexcept {
+// SFA-NX: one shader module per stage (see build_shader_source).
+GXShaderModules build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
+                             DstAlphaMode dstAlphaMode) noexcept {
   ZoneScoped;
   uint32_t normalAttachment = UINT32_MAX;
   for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
@@ -1963,15 +1983,18 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTar
       normalAttachment = i;
     }
   }
-  const auto shaderSource = build_shader_source(config, dstAlphaMode, normalAttachment);
+  const auto sources = build_shader_source(config, dstAlphaMode, normalAttachment);
   const auto hash = xxh3_hash(dstAlphaMode, xxh3_hash(normalAttachment, xxh3_hash(config)));
-  wgpu::ShaderSourceWGSL wgslDescriptor{};
-  wgslDescriptor.code = shaderSource.c_str();
-  const auto label = fmt::format("GX Shader {:x}", hash);
-  const auto shaderDescriptor = wgpu::ShaderModuleDescriptor{
-      .nextInChain = &wgslDescriptor,
-      .label = label.c_str(),
+  const auto create = [&](const std::string& code, const char* stage) {
+    wgpu::ShaderSourceWGSL wgslDescriptor{};
+    wgslDescriptor.code = code.c_str();
+    const auto label = fmt::format("GX Shader {:x} {}", hash, stage);
+    const auto shaderDescriptor = wgpu::ShaderModuleDescriptor{
+        .nextInChain = &wgslDescriptor,
+        .label = label.c_str(),
+    };
+    return webgpu::g_device.CreateShaderModule(&shaderDescriptor);
   };
-  return webgpu::g_device.CreateShaderModule(&shaderDescriptor);
+  return {create(sources.vertex, "vertex"), create(sources.fragment, "fragment")};
 }
 } // namespace aurora::gx

@@ -77,7 +77,8 @@ void MikaBomb_update(GameObject* obj) {
         f32 alphaFloat = alpha;
         f32 fadeStep = 4.0f * timeDelta;
         if (alphaFloat - fadeStep > 0.0f) {
-            obj->anim.alpha = alpha - fadeStep;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            obj->anim.alpha = (s32)(alpha - fadeStep);
         } else {
             Sfx_StopObjectChannel(obj, 0x7f);
             obj->anim.alpha = 0;

@@ -1,4 +1,5 @@
 #include <dolphin/types.h>
+#include <dolphin/os.h>
 #include <dolphin/vi.h>
 #include <aurora/aurora.h>
 #include <aurora/dvd.h>
@@ -34,6 +35,15 @@ static int sBlack;
 static Uint64 sNextRetraceNs;
 
 void fhGXCompleteFrame(void);
+#ifdef __SWITCH__
+void sfaSwitchMenuFrame(void); /* switch/src/switch_menu.cpp: - menu, FPS counter, profiler, shader tour */
+void sfaProfMark(int id);      /* switch/src/prof_switch.cpp: frame phase timing */
+#define SFA_PROF_MARK(id) sfaProfMark(id)
+/* switch/src/vsync_switch.cpp: waits for the display's vsync; 0 means use the timer below instead. */
+int sfaVsyncWait(void);
+#else
+#define SFA_PROF_MARK(id) ((void)0)
+#endif
 
 enum { VI_RETRACE_DEFAULT_HZ = 60 };
 
@@ -46,6 +56,12 @@ static void wait_for_retrace_deadline(void) {
     sNextRetraceNs = 0;
     return;
   }
+#ifdef __SWITCH__
+  if (limit == 60 && sfaVsyncWait()) {
+    sNextRetraceNs = 0;
+    return;
+  }
+#endif
 
   periodNs = SDL_NS_PER_SECOND / (Uint64)(limit > 0 ? limit : VI_RETRACE_DEFAULT_HZ);
   now = SDL_GetTicksNS();
@@ -93,17 +109,26 @@ void foxhollowFramePumpInit(void) {
 }
 
 void VIWaitForRetrace(void) {
+  SFA_PROF_MARK(1);
+  /* The game may call this with "interrupts off" (waitNextFrame does). Holding the lock through the end of
+     the frame, the present and the wait blocked the audio thread for up to 63 ms, so it is dropped here and
+     taken back once the next frame has begun. */
+  const int irqHeld = fhIrqSuspend();
   if (sFrameOpen) {
     fhModsDraw();
 #if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
     fhDebugOverlayDraw();
     fhGalleryDrawOverlay();
 #endif
+#ifdef __SWITCH__
+    sfaSwitchMenuFrame();
+#endif
     if (sBlack) {
       fhDrawBlackScreen();
     }
     fhGXCompleteFrame();
     aurora_end_frame();
+    SFA_PROF_MARK(2);
 #if defined(FOXHOLLOW_DEBUG_INPUT_TIMING)
     fhDebugOverlayFramePresented();
 #endif
@@ -112,23 +137,32 @@ void VIWaitForRetrace(void) {
   fhModsUpdate();
   fhGalleryUpdate();
   fhAutosaveUpdate();
+  /* The audio thread may mix while this thread waits, even when it waits with interrupts off. */
   wait_for_retrace_deadline();
+  SFA_PROF_MARK(3);
   pump_events();
   while (!aurora_begin_frame()) {
     pump_events();
   }
   sFrameOpen = 1;
+  fhIrqResume(irqHeld);
+  SFA_PROF_MARK(0);
 #if defined(FOXHOLLOW_DEBUG_INPUT_TIMING)
   fhDebugOverlayFrameBegin();
 #endif
   fhAIPump();
 
   sRetraceCount++;
-  if (sPreRetraceCallback) {
-    sPreRetraceCallback(sRetraceCount);
-  }
-  if (sPostRetraceCallback) {
-    sPostRetraceCallback(sRetraceCount);
+  {
+    /* The retrace callbacks were interrupt handlers on the GameCube: run them with interrupts off. */
+    BOOL level = OSDisableInterrupts();
+    if (sPreRetraceCallback) {
+      sPreRetraceCallback(sRetraceCount);
+    }
+    if (sPostRetraceCallback) {
+      sPostRetraceCallback(sRetraceCount);
+    }
+    OSRestoreInterrupts(level);
   }
 }
 

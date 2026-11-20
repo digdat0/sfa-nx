@@ -147,7 +147,8 @@ void Vortex_render(GameObject* obj, int p2, int p3, int p4, int p5, s8 visible)
             state->angles[i] = state->angles[i] + dt * gVortexAngleSpeed835[i];
             obj->anim.rootMotionScale = ((f32)ObjAnim_ReadPlacementS16(&obj->anim, &(setup->radiusParam)) / VORTEX_RADIUS_PARAM_SCALE) *
                                         (state->alpha * (state->radiusScale[i] * objScale));
-            obj->anim.renderAlpha = state->alpha * (state->alphaScale[i] * (f32)(u32)objAlpha);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            obj->anim.renderAlpha = (s32)(state->alpha * (state->alphaScale[i] * (f32)(u32)objAlpha));
             model->bufferFlags = (u16)(model->bufferFlags & ~8);
             objRenderModelAndHitVolumes(obj, p2, p3, p4, p5, VORTEX_FULL_ALPHA);
         }
@@ -179,7 +180,8 @@ void Vortex_render(GameObject* obj, int p2, int p3, int p4, int p5, s8 visible)
             obj->anim.rotX = state->angles[i];
             state->angles[i] = state->angles[i] + dt * gVortexAngleSpeed83D[i];
             obj->anim.rootMotionScale = state->alpha * (state->radiusScale[i] * objScale);
-            obj->anim.renderAlpha = state->alpha * (state->alphaScale[i] * (f32)(u32)objAlpha);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            obj->anim.renderAlpha = (s32)(state->alpha * (state->alphaScale[i] * (f32)(u32)objAlpha));
             {
                 f32 radius = VORTEX_DIMPIT_VERTICAL_OFFSET * state->radiusScale[i];
                 obj->anim.localPosY = objY - radius * state->alpha;
@@ -221,7 +223,8 @@ void Vortex_render(GameObject* obj, int p2, int p3, int p4, int p5, s8 visible)
             obj->anim.rotX = state->angles[i];
             state->angles[i] = state->angles[i] + dt * gVortexAngleSpeedDefault[i];
             obj->anim.rootMotionScale = state->alpha * (state->radiusScale[i] * objScale);
-            obj->anim.renderAlpha = state->alpha * (state->alphaScale[i] * (f32)(u32)objAlpha);
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            obj->anim.renderAlpha = (s32)(state->alpha * (state->alphaScale[i] * (f32)(u32)objAlpha));
             {
                 f32 radius = VORTEX_DEFAULT_VERTICAL_OFFSET * state->radiusScale[i];
                 obj->anim.localPosY = radius * state->alpha + objY;

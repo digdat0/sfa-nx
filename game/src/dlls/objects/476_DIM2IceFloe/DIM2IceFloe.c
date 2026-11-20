@@ -90,7 +90,8 @@ void dim2icefloe_update(GameObject* obj) {
             if (reached) {
                 state->completion.finished = 1;
             }
-            state->bobPhase = timeDelta * state->bobRate + (f32)state->bobPhase;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            state->bobPhase = (s32)(timeDelta * state->bobRate + (f32)state->bobPhase);
             if (state->completion.finished) {
                 obj->anim.localPosY = -(DIM2_ICE_FLOE_SINK_SPEED * timeDelta - obj->anim.localPosY);
                 if (obj->anim.localPosY < state->curve.sample[1]) {

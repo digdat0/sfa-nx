@@ -336,7 +336,8 @@ void bossdrakor_spawnAttackObjects(GameObject* obj, BossDrakorState* state, int 
                     setup->posZ = s->homePos.z;
                     ((DrakordThornbushPlacement*)setup)->regrowDelay = 0x3c;
                     ((DrakordThornbushPlacement*)setup)->baseRadius = gBossDrakorThornbushBaseRadius;
-                    ((DrakordThornbushPlacement*)setup)->spawnHealth = gBossDrakorThornbushSpawnHealth;
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    ((DrakordThornbushPlacement*)setup)->spawnHealth = (s32)(gBossDrakorThornbushSpawnHealth);
                     loadObjectAtObject(obj, setup);
                     Sfx_PlayFromObject(obj, SFXTRIG__UNK);
                 }

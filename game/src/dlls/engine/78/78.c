@@ -300,7 +300,8 @@ void CameraModeWorldMap_update(CameraObject* camera) {
                     ? 0.0f
                     : 255.0f * (mathCosf(3.1415927f * (f32)((indicator->anim.rotX - 0x2198) * 2) / 32768.0f) *
                                 mathCosf(3.1415927f * (f32)((indicator->anim.rotY - 0x4000) * 2) / 32768.0f));
-        indicator->anim.alpha = alpha;
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        indicator->anim.alpha = (s32)(alpha);
     } else {
         indicator->anim.alpha = 0;
     }

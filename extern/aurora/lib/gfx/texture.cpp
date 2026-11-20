@@ -17,6 +17,8 @@
 #include <tracy/Tracy.hpp>
 #include <webgpu/webgpu_cpp.h>
 
+extern "C" int sfaSwitchMenuIniValue(const char* key, int def) __attribute__((weak));
+
 namespace aurora::gfx {
 using webgpu::g_device;
 using webgpu::g_queue;
@@ -97,15 +99,35 @@ u16 wgpu_aniso(GXAnisotropy aniso) {
 }
 } // namespace
 
+// SFA-NX: the - menu's "Texture BC1" (read once). GameCube CMPR textures are DXT1-like; uploading them as
+// BC1 keeps them compressed on the GPU (4 bits per texel) instead of decoding them to RGBA8 (32 bits).
+static bool cmpr_as_bc1() noexcept {
+  static const bool on = [] {
+    const bool value =
+        webgpu::g_bcTexturesSupported && sfaSwitchMenuIniValue && sfaSwitchMenuIniValue("texture_bc1", 0) != 0;
+    std::fprintf(stderr, "[sfa-nx] textures: CMPR as BC1 %s\n", value ? "on (opaque textures)" : "off");
+    return value;
+  }();
+  return on;
+}
+
 TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 format, ArrayRef<uint8_t> data,
                                     bool tlut, const char* label) noexcept {
   ZoneScoped;
 
-  auto handle = new_dynamic_texture_2d(width, height, mips, format, label);
+  ByteBuffer bc1;
+  // Only textures without a palette that convert_cmpr_to_bc1 accepts (opaque, sizes a multiple of 4);
+  // anything else takes the usual RGBA8 decode.
+  const bool asBc1 =
+      !tlut && format == GX_TF_CMPR && cmpr_as_bc1() && convert_cmpr_to_bc1(width, height, mips, data, bc1);
+  auto handle = new_dynamic_texture_2d(width, height, mips, asBc1 ? GX_TF_BC1_PC : format, label);
   auto& ref = *handle;
 
   ConvertedTexture converted;
-  if (ref.gxFormat != InvalidTextureFormat) {
+  if (asBc1) {
+    ref.gxFormat = format;
+    data = bc1;
+  } else if (ref.gxFormat != InvalidTextureFormat) {
     if (tlut) {
       CHECK(ref.size.height == 1, "new_static_texture_2d[{}]: expected tlut height 1, got {}", label, ref.size.height);
       CHECK(ref.mipCount == 1, "new_static_texture_2d[{}]: expected tlut mipCount 1, got {}", label, ref.mipCount);

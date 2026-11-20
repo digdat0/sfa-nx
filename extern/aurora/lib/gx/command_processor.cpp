@@ -1,3 +1,4 @@
+#include <cstring>
 #include "command_processor.hpp"
 
 #include "../gfx/depth_peek.hpp"
@@ -23,74 +24,81 @@ namespace aurora::gx::fifo {
 namespace {
 constexpr Module Log{"aurora::gx::fifo"};
 
-u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) noexcept {
-  u16 numIndices = 0;
+// Index generation, written straight into the frame's index data (gfx::map_indices): the old
+// path appended each index to a scratch ByteBuffer (a capacity check per u16) and then copied it.
+// Same indices as before for every primitive.
+u32 idx_count(GXPrimitive prim, u32 vtxCount) noexcept {
+  switch (prim) {
+  case GX_QUADS:
+    return (vtxCount + 3) / 4 * 6;
+  case GX_TRIANGLES:
+    return vtxCount;
+  case GX_TRIANGLEFAN:
+  case GX_TRIANGLESTRIP:
+    return vtxCount <= 3 ? vtxCount : 3 + (vtxCount - 3) * 3;
+  case GX_LINES:
+  case GX_LINESTRIP:
+  case GX_POINTS:
+    return 6;
+  default:
+    UNLIKELY FATAL("unsupported primitive type {}", static_cast<u32>(prim));
+  }
+}
+
+// Writes idx_count(prim, vtxCount) indices for vertices [vtxStart, vtxStart + vtxCount) as triangles:
+// quads split in two, fans and strips expanded (strips alternate winding), and lines/points as one quad.
+void write_idx(u16* out, GXPrimitive prim, u16 vtxStart, u16 vtxCount) noexcept {
   if (prim == GX_QUADS) {
-    buf.reserve_extra((vtxCount / 4) * 6 * sizeof(u16));
-
     for (u16 v = 0; v < vtxCount; v += 4) {
-      u16 idx0 = vtxStart + v;
-      u16 idx1 = vtxStart + v + 1;
-      u16 idx2 = vtxStart + v + 2;
-      u16 idx3 = vtxStart + v + 3;
-
-      buf.append(idx0);
-      buf.append(idx1);
-      buf.append(idx2);
-      numIndices += 3;
-
-      buf.append(idx2);
-      buf.append(idx3);
-      buf.append(idx0);
-      numIndices += 3;
+      const u16 i0 = vtxStart + v;
+      out[0] = i0;
+      out[1] = i0 + 1;
+      out[2] = i0 + 2;
+      out[3] = i0 + 2;
+      out[4] = i0 + 3;
+      out[5] = i0;
+      out += 6;
     }
   } else if (prim == GX_TRIANGLES) {
-    buf.reserve_extra(vtxCount * sizeof(u16));
     for (u16 v = 0; v < vtxCount; ++v) {
-      const u16 idx = vtxStart + v;
-      buf.append(idx);
-      ++numIndices;
+      out[v] = vtxStart + v;
     }
   } else if (prim == GX_TRIANGLEFAN) {
-    buf.reserve_extra(((u32(vtxCount) - 3) * 3 + 3) * sizeof(u16));
-    for (u16 v = 0; v < vtxCount; ++v) {
+    for (u16 v = 0; v < vtxCount && v < 3; ++v) {
+      *out++ = vtxStart + v;
+    }
+    for (u16 v = 3; v < vtxCount; ++v) {
       const u16 idx = vtxStart + v;
-      if (v < 3) {
-        buf.append(idx);
-        ++numIndices;
-        continue;
-      }
-      buf.append(std::array{vtxStart, static_cast<u16>(idx - 1), idx});
-      numIndices += 3;
+      out[0] = vtxStart;
+      out[1] = idx - 1;
+      out[2] = idx;
+      out += 3;
     }
   } else if (prim == GX_TRIANGLESTRIP) {
-    buf.reserve_extra(((static_cast<u32>(vtxCount) - 3) * 3 + 3) * sizeof(u16));
-    for (u16 v = 0; v < vtxCount; ++v) {
+    for (u16 v = 0; v < vtxCount && v < 3; ++v) {
+      *out++ = vtxStart + v;
+    }
+    for (u16 v = 3; v < vtxCount; ++v) {
       const u16 idx = vtxStart + v;
-      if (v < 3) {
-        buf.append(idx);
-        ++numIndices;
-        continue;
-      }
       if ((v & 1) == 0) {
-        buf.append(std::array{static_cast<u16>(idx - 2), static_cast<u16>(idx - 1), idx});
+        out[0] = idx - 2;
+        out[1] = idx - 1;
       } else {
-        buf.append(std::array{static_cast<u16>(idx - 1), static_cast<u16>(idx - 2), idx});
+        out[0] = idx - 1;
+        out[1] = idx - 2;
       }
-      numIndices += 3;
+      out[2] = idx;
+      out += 3;
     }
   } else if (prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS) {
-    buf.reserve_extra(6 * sizeof(u16));
-    buf.append<u16>(0);
-    buf.append<u16>(1);
-    buf.append<u16>(3);
-    buf.append<u16>(3);
-    buf.append<u16>(2);
-    buf.append<u16>(0);
-    numIndices = 6;
+    out[0] = 0;
+    out[1] = 1;
+    out[2] = 3;
+    out[3] = 3;
+    out[4] = 2;
+    out[5] = 0;
   } else
     UNLIKELY FATAL("unsupported primitive type {}", static_cast<u32>(prim));
-  return numIndices;
 }
 
 // GX FIFO opcodes - use CP_ prefix to avoid clashing with GXCommandList.h macros
@@ -404,14 +412,30 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     const bool hadPipeline = cache.hasPipeline;
     const auto prevSampledTextures = cache.shaderInfo.sampledTextures;
     const auto prevSampledIndTextures = cache.shaderInfo.sampledIndTextures;
+    // SFA-NX: the game often marks the pipeline dirty and then sets the same state again. When the
+    // rebuilt config is byte-identical (same target layout and line mode), keep the shader info and
+    // pipeline key: they are pure functions of it. Skips build_shader_info and the config hash
+    // (XXH3 over ~1 KB, 0.3 ms a frame on the FIFO thread, 11192026-0924 profile). Padding that
+    // differs only makes this miss and take the normal path.
+    static PipelineConfig sPrevConfig;
+    const bool canReuse = hadPipeline && cache.targetLayoutKey == targetLayoutKey && cache.lineMode == lineMode;
+    if (canReuse) {
+      std::memcpy(static_cast<void*>(&sPrevConfig), &cache.config, sizeof(PipelineConfig));
+    }
     populate_pipeline_config(cache.config, prim, fmt);
-    cache.shaderInfo = build_shader_info(cache.config.shaderConfig);
-    cache.pipelineRef = gfx::pipeline_ref(cache.config);
+    const bool rebuilt = !canReuse || std::memcmp(&sPrevConfig, &cache.config, sizeof(PipelineConfig)) != 0;
+    if (rebuilt) {
+      cache.shaderInfo = build_shader_info(cache.config.shaderConfig);
+      cache.pipelineRef = gfx::pipeline_ref(cache.config);
+    }
     cache.targetLayoutKey = targetLayoutKey;
     cache.fmt = fmt;
     cache.lineMode = lineMode;
     cache.hasPipeline = true;
-    state.dirty = (state.dirty & ~DirtyPipeline) | DirtyUniform;
+    state.dirty &= ~DirtyPipeline;
+    if (rebuilt) {
+      state.dirty |= DirtyUniform;
+    }
     if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
         prevSampledIndTextures != cache.shaderInfo.sampledIndTextures) {
       cache.bindGeneration = 0;
@@ -479,10 +503,12 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
 
   if (prim != GX_TRIANGLES) {
     ZoneScopedN("build idx buffer");
-    static ByteBuffer idxBuf;
-    numIndices = prepare_idx_buffer(idxBuf, prim, 0, vtxCount);
-    idxRange = gfx::push_indices(idxBuf.data(), idxBuf.size(), 4);
-    idxBuf.clear();
+    numIndices = idx_count(prim, vtxCount);
+    u8* out;
+    idxRange = gfx::map_indices(numIndices * sizeof(u16), 4, out);
+    if (out != nullptr) {
+      write_idx(reinterpret_cast<u16*>(out), prim, 0, vtxCount);
+    }
   }
 
   push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices);
@@ -513,16 +539,24 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
   if (canMerge) {
     u32 numIndices = 0;
     gfx::Range idxRange;
-    static ByteBuffer idxBuf;
     const bool hadIndexRange = lastDraw->idxRange.size != 0;
+    // When this draw merges into the previous one, the previous draw's triangles are written again at the
+    // start of the new index range (its vertices are already in the merged vertex range).
+    u32 prevIndices = 0;
     if (lastDraw->indexCount == 0 && prim != GX_TRIANGLES) {
       // Generate triangle index buffer for previous draw
-      lastDraw->indexCount = prepare_idx_buffer(idxBuf, GX_TRIANGLES, 0, lastDraw->vtxCount);
+      prevIndices = lastDraw->vtxCount;
+      lastDraw->indexCount = prevIndices;
     }
     if (lastDraw->indexCount != 0) {
-      numIndices += prepare_idx_buffer(idxBuf, prim, lastDraw->vtxCount, vtxCount);
-      idxRange = gfx::push_indices(idxBuf.data(), idxBuf.size(), hadIndexRange ? 0 : 4);
-      idxBuf.clear();
+      numIndices = idx_count(prim, vtxCount);
+      u8* out;
+      idxRange = gfx::map_indices((prevIndices + numIndices) * sizeof(u16), hadIndexRange ? 0 : 4, out);
+      if (out != nullptr) {
+        auto* idx = reinterpret_cast<u16*>(out);
+        write_idx(idx, GX_TRIANGLES, 0, prevIndices);
+        write_idx(idx + prevIndices, prim, lastDraw->vtxCount, vtxCount);
+      }
     }
     CHECK(lastDraw->vertRange.offset + lastDraw->vertRange.size == vertRange.offset,
           "Non-consecutive vertex ranges ({} < {})", lastDraw->vertRange.offset + lastDraw->vertRange.size,

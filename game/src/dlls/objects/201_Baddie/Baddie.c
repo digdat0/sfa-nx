@@ -1956,7 +1956,8 @@ int enemy_findNearbyEnemies(GameObject* obj, f32 radius, u8 flags, int max, Enem
         out->obj = tgt;
         if (tgt != 0)
         {
-            out->dist = radius;
+            // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+            out->dist = (s32)(radius);
             resultCount = 1;
             if ((flags & 2) != 0)
             {
@@ -2013,7 +2014,8 @@ int enemy_findNearbyEnemies(GameObject* obj, f32 radius, u8 flags, int max, Enem
                 if ((distSquared < radius) && (arr[i] != obj))
                 {
                     cur[0]->obj = arr[i];
-                    cur[0]->dist = sqrtf(distSquared);
+                    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+                    cur[0]->dist = (s32)(sqrtf(distSquared));
                     if ((flags & 2) != 0)
                     {
                         if ((state->flags2E4 & 0x8000) != 0)

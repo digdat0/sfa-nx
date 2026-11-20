@@ -38,6 +38,10 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(__SWITCH__)
+extern "C" int sfaSwitchMenuIniValue(const char* key, int def) __attribute__((weak));
+#endif
+
 namespace aurora::texture {
 namespace {
 constexpr Module Log{"aurora::texture"};
@@ -1033,8 +1037,22 @@ void touch_cached_replacement(decltype(s_cacheByKey)::iterator it) noexcept {
   }
 }
 
+// SFA-NX: memory for decoded HD textures; the least recently used are dropped beyond it. On Switch it comes
+// from switch_menu.ini hd_texture_mb (default 512 MiB, 64 to 1536).
+uint64_t replacement_cache_budget() noexcept {
+#if defined(__SWITCH__)
+  static const uint64_t budget = [] {
+    const int mb = sfaSwitchMenuIniValue != nullptr ? sfaSwitchMenuIniValue("hd_texture_mb", 512) : 512;
+    return static_cast<uint64_t>(std::clamp(mb, 64, 1536)) << 20;
+  }();
+  return budget;
+#else
+  return kReplacementCacheBudgetBytes;
+#endif
+}
+
 void evict_replacement_cache_if_needed() noexcept {
-  while (s_replacementCacheBytes > kReplacementCacheBudgetBytes && !s_replacementLru.empty()) {
+  while (s_replacementCacheBytes > replacement_cache_budget() && !s_replacementLru.empty()) {
     const auto key = s_replacementLru.back();
     const auto cache = s_cacheByKey.find(key);
     const uint64_t id = cache == s_cacheByKey.end() ? 0 : cache->second.id;
@@ -1656,6 +1674,11 @@ ReplacementGroup load_replacement_directory(const std::filesystem::path& root, R
     }
 
     if (is_sidecar_mip(io::fs_path_to_string(path.stem()))) {
+      continue;
+    }
+
+    // SFA-NX: the caller's filter (ReplacementOptions::accept) may skip files by name.
+    if (options.accept != nullptr && !options.accept(io::fs_path_to_string(path.filename()))) {
       continue;
     }
 

@@ -24,6 +24,9 @@
 #include <ranges>
 #include <variant>
 #include <thread>
+#ifdef __SWITCH__
+extern "C" void melee_nx_perf_background_thread(const char* name);
+#endif
 
 #include <SDL3/SDL_iostream.h>
 #include <absl/container/flat_hash_map.h>
@@ -915,6 +918,9 @@ static void pipeline_cache_writer() {
 #ifdef TRACY_ENABLE
   tracy::SetThreadName("Pipeline cache writer thread");
 #endif
+#ifdef __SWITCH__
+  melee_nx_perf_background_thread("Aurora pipeline cache writer");
+#endif
 
   while (true) {
     std::deque<PipelineCacheWrite> batch;
@@ -958,6 +964,11 @@ static void pipeline_cache_writer() {
 static void pipeline_worker() {
 #ifdef TRACY_ENABLE
   tracy::SetThreadName("Pipeline compilation thread");
+#endif
+#ifdef __SWITCH__
+  if (g_hasPipelineThread) {
+    melee_nx_perf_background_thread("Aurora pipeline worker");
+  }
 #endif
 
   bool hasMore = false;
@@ -1093,6 +1104,21 @@ PipelineRef find_pipeline(const clear::PipelineConfig& config, const RenderTarge
 }
 
 PipelineRef find_pipeline(const gx::PipelineConfig& config, const RenderTargetLayout& layout) {
+  // SFA-NX: every GX draw comes here. A pipeline already built and remembered costs one hash of the
+  // config and one lock; the general path below hashes it twice, locks twice and heap-allocates the
+  // std::function for building it (1.3 ms per frame of malloc lock waits on the FIFO thread, 0707 logs).
+  {
+    const auto cacheKey = xxh3_hash(config, static_cast<HashType>(ShaderType::GX));
+    const auto runtimeKey = xxh3_hash(layout.key, cacheKey);
+    const auto frame = current_frame();
+    std::lock_guard lock{g_pipelineMutex};
+    if (g_pipelines.contains(runtimeKey)) {
+      const auto known = g_knownPipelines.find(cacheKey);
+      if (known != g_knownPipelines.end() && known->second.firstFrameUsed <= frame) {
+        return runtimeKey;
+      }
+    }
+  }
   remember_pipeline_config(ShaderType::GX, config, current_frame(), true);
   return resolve_pipeline(ShaderType::GX, config, layout, PipelinePriority::Normal);
 }
@@ -1198,6 +1224,17 @@ void end_pipeline_frame() {
   }
 }
 
+bool get_pipeline_raw(PipelineRef ref, WGPURenderPipeline& main, WGPURenderPipeline& prepass) {
+  std::lock_guard guard{g_pipelineMutex};
+  const auto it = g_pipelines.find(ref);
+  if (it == g_pipelines.end() || !it->second.main) {
+    return false;
+  }
+  main = it->second.main.Get();
+  prepass = it->second.prepass.Get();
+  return true;
+}
+
 bool get_pipeline(PipelineRef ref, CompiledPipeline& pipeline) {
   std::lock_guard guard{g_pipelineMutex};
   const auto it = g_pipelines.find(ref);
@@ -1209,3 +1246,10 @@ bool get_pipeline(PipelineRef ref, CompiledPipeline& pipeline) {
 }
 
 } // namespace aurora::gfx
+
+// Pipelines queued for creation; *created = pipelines created since start (SFA-NX shader tour).
+extern "C" unsigned aurora_pipeline_activity(unsigned* created) {
+  auto& stats = aurora::gfx::detail::resources().stats;
+  *created = __atomic_load_n(&stats.createdPipelines, __ATOMIC_RELAXED);
+  return __atomic_load_n(&stats.queuedPipelines, __ATOMIC_RELAXED);
+}

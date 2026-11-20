@@ -55,7 +55,8 @@ void GCbaddieShield_update(GameObject* obj) {
     obj->anim.rotZ += GCBADDIE_SHIELD_ROTATION_SPEED_Z * timeDelta;
 
     if (state->remainingLifetime <= GCBADDIE_SHIELD_FADE_DURATION) {
-        obj->anim.alpha = GCBADDIE_SHIELD_MAX_ALPHA * (state->remainingLifetime * GCBADDIE_SHIELD_FADE_SCALE);
+        // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+        obj->anim.alpha = (s32)(GCBADDIE_SHIELD_MAX_ALPHA * (state->remainingLifetime * GCBADDIE_SHIELD_FADE_SCALE));
     } else {
         obj->anim.alpha = 0xff;
     }

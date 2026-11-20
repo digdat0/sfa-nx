@@ -70,7 +70,8 @@ void dll_2A3_update(GameObject* obj) {
         alpha = 255.0f;
     }
 
-    obj->anim.alpha = alpha;
+    // SFA-NX: (s32) first, so the float wraps like on GameCube instead of clamping (AArch64; docs/SWITCH_PORT.md)
+    obj->anim.alpha = (s32)(alpha);
     obj->anim.rotX += state->spinRateX * timeDelta;
     obj->anim.rotY += state->spinRateY * timeDelta;
     obj->anim.rotZ += state->spinRateZ * timeDelta;
