@@ -1,6 +1,6 @@
 // SFA-NX's - (minus) menu, drawn with Aurora's Dear ImGui. Two tabs, switched with L / R:
 //   Game:  Show FPS, Invert look, HD textures, Button mapping, Updates.
-//   Debug: the profiler, thread placement (perf_switch.cpp policies, switched live), the audio thread
+//   Debug: (only with debug_menu=1 in switch_menu.ini, off by default) the profiler, thread placement (perf_switch.cpp policies, switched live), the audio thread
 //          (port/src/ai_shim.c), frame overlap / frame step / pacing, the renderer, GPU clock and GPU
 //          options, the shader tour and clearing the shader cache.
 // Some settings apply at once; compression, Z-cull, BC1 textures and HD textures are read by the renderer
@@ -84,6 +84,9 @@ bool sVsyncPace = true;
 // Menu state: open, current tab and row, and last frame's button states (to detect new presses).
 bool sOpen;
 int sTab;
+// The Debug tab is for testing builds: hidden unless switch_menu.ini has debug_menu=1 (never on by default,
+// so released builds show only the Game tab). Its settings in the ini still apply when it is hidden.
+bool sShowDebug;
 int sSelected;
 bool sPrevDown[SDL_GAMEPAD_BUTTON_COUNT];
 
@@ -508,6 +511,8 @@ void load_settings() {
             sHdTextureMb = value < 64 ? 64 : value > 1536 ? 1536 : value;
         } else if (std::sscanf(line, "shader_tour=%d", &value) == 1) {
             sTourAutoStart = value >= 0 ? value : -1;
+        } else if (std::sscanf(line, "debug_menu=%d", &value) == 1) {
+            sShowDebug = value != 0;  // shows the Debug tab (testing only)
         } else if (std::sscanf(line, "profiler=%d", &value) == 1) {
             // Test runs (Ryujinx) only: read, never written; the menu's Profiler item is not saved.
             if (value != 0) {
@@ -560,6 +565,10 @@ void save_settings() {
                     "hd_textures=%d\nhd_texture_mb=%d\n", sHdTextures ? 1 : 0, sHdTextureMb);
     std::fprintf(f, "# language (PAL disc, at next start): 0 English, 1 French, 2 German, 3 Italian, 5 Spanish\n"
                     "language=%d\n", sLanguage);
+    // Kept only when enabled, so a normal ini never mentions the testing tab.
+    if (sShowDebug) {
+        std::fprintf(f, "# debug_menu: 1 shows the Debug tab\ndebug_menu=1\n");
+    }
     if (sCustom) {
         std::fprintf(f, "# GameCube A B X Y Z L R Start Up Down Left Right: SDL button, 104 ZL, 105 ZR, -1 none\nmap=");
         for (int i = 0; i < PAD_BUTTON_COUNT; ++i) {
@@ -745,7 +754,8 @@ void update_input() {
     const int item = items[sSelected < count ? sSelected : 0];
     if (pressed[b]) {
         sOpen = false;
-    } else if (pressed[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] || pressed[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER]) {
+    } else if (sShowDebug &&  // L / R switch tabs only when the Debug tab is shown
+               (pressed[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] || pressed[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER])) {
         sTab = 1 - sTab;
         sSelected = 0;
     } else if (pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]) {
@@ -893,8 +903,9 @@ void draw_menu() {
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs |
                                    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     ImGui::Begin("SFA-NX menu", nullptr, flags);
+    // The tallest tab sets the font scale and height: Debug when shown, otherwise Game.
     int debugCount = 0;
-    tab_items(1, &debugCount);
+    tab_items(sShowDebug ? 1 : 0, &debugCount);
     ImGui::SetWindowFontScale(1.0f);
     const float base = ImGui::GetFontSize();
     const float spacing = ImGui::GetStyle().ItemSpacing.y;
@@ -912,18 +923,21 @@ void draw_menu() {
     ImGui::SetWindowFontScale(scale);
     ImGui::Dummy(ImVec2(ImGui::CalcTextSize("> Render compression     Resume at warp 76  < restart >").x, 0.0f));
     ImGui::TextUnformatted("SFA-NX");
-    ImGui::SameLine();
-    ImGui::TextDisabled("  L");
-    for (int t = 0; t < 2; ++t) {
+    // Tab strip only when there is a second tab to switch to.
+    if (sShowDebug) {
         ImGui::SameLine();
-        if (t == sTab) {
-            ImGui::TextColored(kGold, "[%s]", kTabNames[t]);
-        } else {
-            ImGui::TextDisabled(" %s ", kTabNames[t]);
+        ImGui::TextDisabled("  L");
+        for (int t = 0; t < 2; ++t) {
+            ImGui::SameLine();
+            if (t == sTab) {
+                ImGui::TextColored(kGold, "[%s]", kTabNames[t]);
+            } else {
+                ImGui::TextDisabled(" %s ", kTabNames[t]);
+            }
         }
+        ImGui::SameLine();
+        ImGui::TextDisabled("R");
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("R");
     ImGui::Separator();
     const char* labels[kItemCount] = {"Show FPS",      "Invert look",   "Profiler",
                                       "Threads",       "Audio thread",         "Frame overlap", "Frame step",
@@ -1007,7 +1021,9 @@ void draw_menu() {
     }
     ImGui::Separator();
     ImGui::SetWindowFontScale(scale * 0.7f);
-    ImGui::TextDisabled("L / R: tab   D-Pad: choose   A: change   B / -: close");
+    // The L / R hint only applies when the Debug tab is shown.
+    ImGui::TextDisabled(sShowDebug ? "L / R: tab   D-Pad: choose   A: change   B / -: close"
+                                   : "D-Pad: choose   A: change   B / -: close");
     ImGui::End();
 }
 

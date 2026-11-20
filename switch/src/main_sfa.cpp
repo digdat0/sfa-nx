@@ -350,6 +350,9 @@ extern "C" int main(int argc, char** argv) {
 
     mkdir(SFA_DIR "/user", 0777);
     mkdir(SFA_DIR "/cache", 0777);
+    // Empty mods/hd so players see where the HD texture pack goes (hd_textures_switch.cpp reads it).
+    mkdir(SFA_DIR "/mods", 0777);
+    mkdir(SFA_DIR "/mods/hd", 0777);
     setenv("FOXHOLLOW_USER_DIR", SFA_DIR "/user", 0);
     setenv("FOXHOLLOW_CACHE_DIR", SFA_DIR "/cache", 0);
     // Aurora's resources path, where it looks for the shipped pipeline seed initial_pipeline_cache.db. With

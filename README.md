@@ -23,23 +23,27 @@ Note: This is an AI assisted project.
 
 The first start takes longer while shaders are prepared. Save from the game's own menu.
 
-SFA-NX creates its own folders next to the `.nro`: `config/` (settings), `cache/` (shaders), `user/` (saves) and
-`logs/`.
+SFA-NX creates its own folders next to the `.nro` on the first start:
 
 ```
 sdmc:/switch/SFA-NX/
-  SFA-NX.nro
-  Star Fox Adventures.iso   (or Star Fox Adventures.rvz)
-  mods/hd/              (optional, HD textures)
-  config/  cache/  user/  logs/   (created by SFA-NX)
+├── SFA-NX.nro
+├── Star Fox Adventures.iso   (your disc image, or Star Fox Adventures.rvz)
+├── config/                   settings
+├── cache/                    shaders
+├── user/                     saves
+├── logs/                     log files
+└── mods/
+    └── hd/                   HD texture pack (optional, see below)
 ```
 
 ## Options menu
 
-Press **−** in game to open the options menu. **L** / **R** switch between tabs.
+Press **−** in game to open the options menu.
 
 - **Game**: Show FPS, Invert look, HD textures, Button mapping, Updates.
-- **Debug**: performance and renderer settings for testing.
+- **Debug**: performance and renderer settings for testing. Hidden unless `config/switch_menu.ini` contains
+  the line `debug_menu=1`.
 
 Default controls follow the GameCube layout: ZL / ZR are the L / R triggers and R is Z. You can change them
 under **Button mapping**.
@@ -96,5 +100,16 @@ SFA-NX is built on the work of these projects and people:
 - The authors of the [Star Fox Adventures HD texture pack](https://gamebanana.com/mods/151176).
 - [Zeedif](https://www.steamgriddb.com/profile/76561198108269802): the app icon, from
   [SteamGridDB](https://www.steamgriddb.com/grid/693481).
+
+## License
+
+SFA-NX is free software under the [GNU General Public License v3.0](LICENSE): you may use, change and share it,
+but if you distribute a modified version you must publish its source under the same license and keep the
+copyright notices, including credit to SFA-NX (digdat0).
+
+Parts of the repository come from other projects and keep their own licenses, all compatible with the GPL:
+Foxhollow and the SFA decompilation are CC0 1.0 ([LICENSE-FOXHOLLOW](LICENSE-FOXHOLLOW)), Aurora is MIT
+([extern/aurora/LICENSE](extern/aurora/LICENSE)), and the deko3d renderer code is MIT and MPL-2.0
+([switch/deko/THIRD_PARTY.md](switch/deko/THIRD_PARTY.md)).
 
 Star Fox Adventures is © Nintendo and Rare. This project is not affiliated with or endorsed by Nintendo.
