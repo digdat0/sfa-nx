@@ -53,6 +53,7 @@ extern int __real_pthread_join(pthread_t, void**);
 
 typedef struct KpThreadRec {
     pthread_t id;
+    void* (*start)(void*);         /* the thread's function, logged if it is still running at exit */
     void* stack_buf;               /* the memalign'd stack below; NULL if the caller supplied one */
     int finished;                  /* set by the thread itself, just before it returns */
     int detached;                  /* set by __wrap_pthread_detach */
@@ -66,6 +67,9 @@ static KpThreadRec* kp_registry;
 static KpThreadRec* kp_reap_head;
 static KpThreadRec* kp_reap_tail;
 static int kp_reaper_running;
+static pthread_t kp_reaper;       /* joined by kartpad_end_threads */
+static int kp_reaper_quit;        /* kartpad_end_threads: end once the queue is empty */
+static int kp_reaper_busy;        /* joining a record outside the lock */
 
 /* All three helpers below require kp_thread_mutex. */
 static KpThreadRec* kp_find_locked(pthread_t id) {
@@ -105,9 +109,14 @@ static void* kp_reaper_main(void* unused) {
     kartpad_sync_clang_tls();
     for (;;) {
         pthread_mutex_lock(&kp_thread_mutex);
-        while (kp_reap_head == NULL) {
+        while (kp_reap_head == NULL && !kp_reaper_quit) {
             pthread_cond_wait(&kp_reap_cond, &kp_thread_mutex);
         }
+        if (kp_reap_head == NULL) { /* asked to quit and nothing left to reap */
+            pthread_mutex_unlock(&kp_thread_mutex);
+            return NULL;
+        }
+        kp_reaper_busy = 1;
         KpThreadRec* rec = kp_reap_head;
         kp_reap_head = rec->reap_next;
         if (kp_reap_head == NULL) {
@@ -120,6 +129,9 @@ static void* kp_reaper_main(void* unused) {
         __real_pthread_join(rec->id, NULL);
         free(rec->stack_buf);
         free(rec);
+        pthread_mutex_lock(&kp_thread_mutex);
+        kp_reaper_busy = 0;
+        pthread_mutex_unlock(&kp_thread_mutex);
     }
     return NULL;
 }
@@ -131,8 +143,7 @@ int __wrap_pthread_detach(pthread_t thread) {
     pthread_mutex_lock(&kp_thread_mutex);
     if (!kp_reaper_running) {
         /* The reaper is persistent and does not need the worker stack floor. */
-        pthread_t reaper;
-        if (__real_pthread_create(&reaper, NULL, kp_reaper_main, NULL) == 0) {
+        if (__real_pthread_create(&kp_reaper, NULL, kp_reaper_main, NULL) == 0) {
             kp_reaper_running = 1;
         } else {
             reaper_failed = 1;
@@ -231,6 +242,92 @@ __attribute__((noreturn)) static void kartpad_fast_exit(void) {
     __builtin_unreachable();
 }
 
+/* The menu's Restart (vi_shim.c's shutdown_and_exit) returns to hbloader, which then starts the NRO again in
+   this same process. Every thread must have ended by then: one left running would execute the unloaded image,
+   and even ended-but-unjoined threads keep counting against the process's thread limit.
+   kartpad_end_threads waits up to 2 s for the threads created through this file to finish, joins the finished
+   ones nobody joined, ends the reaper, and returns how many are still running (logged with their functions as
+   offsets into the NRO, for addr2line). */
+int kartpad_end_threads(void) {
+    /* The async log writer (log_switch.cpp) runs until told to stop, so end it first: it flushes what is
+       queued, joins its thread, and later log lines are written straight to the file. Calling it again in
+       kartpad_exit_to_loader is harmless. (Build 1511 counted it as left running and never relaunched.) */
+    melee_nx_log_shutdown();
+    int alive = 0;
+    for (int i = 0; i < 200; ++i) {
+        pthread_mutex_lock(&kp_thread_mutex);
+        alive = 0;
+        int reaping = kp_reap_head != NULL || kp_reaper_busy;
+        for (KpThreadRec* r = kp_registry; r != NULL; r = r->next) {
+            alive += !r->finished;
+            reaping |= r->detached; /* a detached record leaves the registry when reaped */
+        }
+        pthread_mutex_unlock(&kp_thread_mutex);
+        if (alive == 0 && !reaping) {
+            break;
+        }
+        svcSleepThread(10000000);
+    }
+
+    /* Finished threads that were neither joined nor detached: join them now (returns at once). */
+    for (;;) {
+        pthread_mutex_lock(&kp_thread_mutex);
+        KpThreadRec* done = NULL;
+        for (KpThreadRec* r = kp_registry; r != NULL; r = r->next) {
+            if (r->finished && !r->detached) {
+                done = r;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&kp_thread_mutex);
+        if (done == NULL) {
+            break;
+        }
+        __wrap_pthread_join(done->id, NULL);
+    }
+
+    pthread_mutex_lock(&kp_thread_mutex);
+    const int stopReaper = kp_reaper_running;
+    kp_reaper_quit = 1;
+    pthread_cond_signal(&kp_reap_cond);
+    pthread_mutex_unlock(&kp_thread_mutex);
+    if (stopReaper) {
+        __real_pthread_join(kp_reaper, NULL);
+        kp_reaper_running = 0;
+    }
+
+    MemoryInfo mi;
+    u32 pi;
+    const uintptr_t base = R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)&kartpad_end_threads)) ? mi.addr : 0;
+    pthread_mutex_lock(&kp_thread_mutex);
+    for (KpThreadRec* r = kp_registry; r != NULL; r = r->next) {
+        if (!r->finished) {
+            melee_boot_trace("exit: thread still running, start 0x%lx", (unsigned long)((uintptr_t)r->start - base));
+        } else {
+            melee_boot_trace("exit: thread finished but not reaped, start 0x%lx", (unsigned long)((uintptr_t)r->start - base));
+            ++alive;
+        }
+    }
+    pthread_mutex_unlock(&kp_thread_mutex);
+    melee_boot_trace("exit: %d threads created this run, %d left", kartpad_threads_created, alive);
+    return alive;
+}
+
+extern void __real__exit(int code) __attribute__((noreturn));
+
+/* Restart's way out once kartpad_end_threads reported none left: flush like kartpad_fast_exit, then libnx's own
+   _exit, which closes its services and returns to hbloader (which starts the NRO set by envSetNextLoad).
+   Static destructors are skipped, as in kartpad_fast_exit. */
+__attribute__((noreturn)) void kartpad_exit_to_loader(void) {
+    aurora_flush_caches();
+    melee_nx_sqlite_flush_all();
+    melee_nx_log_shutdown();
+    fflush(NULL);
+    fsync(STDOUT_FILENO);
+    fsync(STDERR_FILENO);
+    __real__exit(0);
+}
+
 __attribute__((noreturn)) void __wrap_exit(int code) {
     (void)code; /* Horizon has no exit status to report. */
     kartpad_fast_exit();
@@ -262,6 +359,7 @@ int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr, void* (
     ctx->start = start;
     ctx->arg = arg;
     ctx->rec = rec;
+    rec->start = start;
 
     // An explicit stack buffer is required: setting only the size leaves libnx
     // using its default stack. A joiner frees the buffer after the thread exits.

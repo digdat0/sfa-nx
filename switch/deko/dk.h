@@ -69,6 +69,7 @@ struct Block {
 };
 
 void memory_init();
+uint32_t memory_release_all();  // Restart: destroys the command buffer and every memory block; returns the block count
 void frame_begin(uint64_t frame);   // waits for the slot's fence, resets its stream and command memory
 void frame_end();                   // the fence after this frame's commands (recorded into the command buffer)
 bool frame_done(uint64_t frame);    // the GPU has finished that frame's commands (no wait; render worker)
@@ -268,6 +269,7 @@ void shaders_frame_start();  // the budget's frame (render worker)
 void shader_compile_boost(bool on);
 // Starts the uam worker and reads dksh_local.bin (after shader_cache_init).
 void shaders_init(uint32_t gxConfigVersion);
+void shaders_shutdown();  // ends the uam worker thread (at exit)
 
 // ---- the test pattern (pattern.cpp), COS_DK_TEST_PATTERN=1 ------------------------------------------
 bool pattern_enabled();

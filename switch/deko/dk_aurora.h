@@ -21,6 +21,10 @@ void aurora_switch_dk_init(uint32_t gxConfigVersion);
 // Waits for the GPU and releases the window (Aurora's shutdown).
 void aurora_switch_dk_shutdown(void);
 
+// Restart only, after aurora_shutdown: destroys every GPU memory block, the queue and the device so
+// hbloader can reuse the heap for the next NRO.
+void aurora_switch_dk_release_all(void);
+
 // One frame of the boot screen: a title, a progress bar (fraction 0..1; below 0 draws none) and up to
 // two lines under it. Only before Aurora's render worker presents (the shader preload in
 // pipeline_cache.cpp); the text is the renderer's 3x5 font: capitals, digits and a few signs.

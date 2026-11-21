@@ -5,7 +5,8 @@
 cmake_minimum_required(VERSION 3.25)
 # VERSION is the release version: the NRO's metadata and the in-app updater (SFA_NX_VERSION) use it, so
 # bump it for each GitHub release.
-project(sfa-nx LANGUAGES C CXX ASM VERSION 0.1.0)
+# 1.0.0: first SFA-NX release; the updater compares release tags against this.
+project(sfa-nx LANGUAGES C CXX ASM VERSION 1.0.0)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
@@ -153,7 +154,8 @@ target_link_options(sfa-nx PRIVATE "LINKER:--gc-sections" "LINKER:--allow-multip
 set(CMAKE_CXX_STANDARD_LIBRARIES "-Wl,--start-group ${MELEE_GFX_LINK_LIBS} -lstdc++ -lnx -lm -Wl,--end-group" CACHE STRING "" FORCE)
 
 set_target_properties(sfa-nx PROPERTIES OUTPUT_NAME SFA-NX)
-nx_generate_nacp(SFA-NX.nacp NAME "SFA-NX" AUTHOR "Foxhollow + SFA decomp" VERSION "${PROJECT_VERSION}")
+# Name and author shown in the homebrew menu's NRO details (the file and folder stay SFA-NX).
+nx_generate_nacp(SFA-NX.nacp NAME "Starfox Adventures" AUTHOR "digdat0" VERSION "${PROJECT_VERSION}")
 # RomFS inside the NRO: the shader and pipeline seeds (switch/seed), read in place at startup
 # (romfs:/deko/initial_dksh_cache.bin, romfs:/initial_pipeline_cache.db), so players only copy the NRO.
 # configure_file re-copies them whenever the seed files change.

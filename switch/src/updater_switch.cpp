@@ -417,6 +417,34 @@ extern "C" void sfaUpdaterStatus(char* out, size_t size) {
     }
 }
 
+// The state number (State above), download percentage and release tag, for the menu to word the Updates row
+// in the game's language itself.
+extern "C" int sfaUpdaterState(int* percent, char* tag, size_t tagSize) {
+    const int state = g_state.load();
+    *percent = g_percent.load();
+    std::lock_guard<std::mutex> lock(g_mutex);
+    std::snprintf(tag, tagSize, "%s", g_latest.c_str());
+    return state;
+}
+
+// The menu's Restart row: quits and asks hbloader to start this NRO again, so settings read at start take
+// effect. Loaders without next-load support just quit; the settings apply the next time SFA-NX is started.
+// Set by sfaRelaunch; sfaRelaunchPending tells vi_shim.c's shutdown_and_exit to return to hbloader instead of
+// ending the process (ending it shows "the software was closed" under title takeover and starts nothing).
+static bool g_relaunch = false;
+extern "C" int sfaRelaunchPending(void) { return g_relaunch ? 1 : 0; }
+
+extern "C" void sfaRelaunch(void) {
+    if (envHasNextLoad()) {
+        envSetNextLoad(g_nroPath.c_str(), g_nroPath.c_str());
+        g_relaunch = true;
+        pc_log_line("[sfa-nx] restart: relaunching %s", g_nroPath.c_str());
+    } else {
+        pc_log_line("[sfa-nx] restart: no relaunch available, quitting");
+    }
+    fhRequestQuit();
+}
+
 // The menu's A press: starts the next step for the current state (see the top of the file).
 extern "C" void sfaUpdaterActivate(void) {
     if (g_busy.load()) {

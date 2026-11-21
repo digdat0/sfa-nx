@@ -23,6 +23,11 @@ extern "C" void kartpad_log_flush_sync(void);
 namespace swdk {
 namespace {
 
+// The blocks make_block created and destroy_block hasn't destroyed yet (see destroy_block).
+std::mutex g_liveBlocksMutex;
+std::vector<DkMemBlock> g_liveBlocks;
+void destroy_block(DkMemBlock b);
+
 // deko3d aborts the process when a creation fails and never returns null: the line before names
 // what was being created
 DkMemBlock make_block(uint32_t size, uint32_t flags, const char* what) {
@@ -33,7 +38,27 @@ DkMemBlock make_block(uint32_t size, uint32_t flags, const char* what) {
     m.flags = flags;
     DkMemBlock b = dkMemBlockCreate(&m);
     dklog("memory block: %s at GPU address 0x%llX", what, (unsigned long long)dkMemBlockGetGpuAddr(b));
+    {
+        std::lock_guard<std::mutex> lock(g_liveBlocksMutex);
+        g_liveBlocks.push_back(b);  // memory_release_all destroys whatever is still here at Restart
+    }
     return b;
+}
+
+// Every block that exists, for memory_release_all. A block's heap pages stay locked to the GPU until
+// it is destroyed, and hbloader reads the next NRO into that heap: one left over makes its code mapping
+// fail (hbl aborts with 2001-0106, InvalidCurrentMemory; MKDD-NX's gfx_close hit the same).
+// Every destroy in this file goes through destroy_block so the list stays exact.
+void destroy_block(DkMemBlock b) {
+    {
+        std::lock_guard<std::mutex> lock(g_liveBlocksMutex);
+        auto it = std::find(g_liveBlocks.begin(), g_liveBlocks.end(), b);
+        if (it != g_liveBlocks.end()) {
+            *it = g_liveBlocks.back();  // order doesn't matter: swap with the last and drop it
+            g_liveBlocks.pop_back();
+        }
+    }
+    dkMemBlockDestroy(b);
 }
 
 constexpr uint32_t align_up(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
@@ -149,7 +174,7 @@ void trim_image_chunks() {
         if (!chunk.block || chunk.free.size() != 1 || chunk.free[0].first != 0 ||
             chunk.free[0].second != chunk.size) continue;
         if (!spare && chunk.size == kImageChunkSize) { spare = true; continue; }
-        dkMemBlockDestroy(chunk.block);
+        destroy_block(chunk.block);
         chunk.block = nullptr;
         chunk.size = 0;
         chunk.free.clear();
@@ -201,8 +226,8 @@ static void memory_bench() {
     dklog("membench: 8 MiB in 2 KiB copies: uncached %.2f ms, cached %.2f ms + flush %.2f ms, heap %.2f ms; in 40-byte "
           "copies: uncached %.2f ms, cached %.2f ms + flush %.2f ms, heap %.2f ms",
           r[0][0], r[0][1], r[0][2], r[0][3], r[1][0], r[1][1], r[1][2], r[1][3]);
-    dkMemBlockDestroy(unc);
-    dkMemBlockDestroy(cac);
+    destroy_block(unc);
+    destroy_block(cac);
 }
 
 void memory_init() {
@@ -287,7 +312,7 @@ void frame_begin(uint64_t frame) {
     s.retired.clear();
     for (DkMemBlock b : s.retiredBlocks) {
         g_stats.blockBytes -= dkMemBlockGetSize(b);
-        dkMemBlockDestroy(b);
+        destroy_block(b);
     }
     s.retiredBlocks.clear();
     // what other threads freed since the last frame: freed once this frame is done
@@ -578,6 +603,39 @@ MemoryStats memory_stats_take() {
     g_stats.cmdBytesMax = g_stats.cmdBytesSum = g_stats.cmdOverflows = 0;
     g_stats.streamBytesMax = g_stats.streamFull = g_stats.frames = 0;
     return s;
+}
+
+// (dk.h) Restart only, after aurora_shutdown with the GPU idle: destroys the command buffer and every
+// memory block still alive (rings, code, descriptors, image heap chunks, staging, retired ones), so the
+// heap is free of GPU locks when hbloader loads the next NRO. Nothing may render afterwards; the
+// bookkeeping that points at the blocks is cleared so no later call destroys one twice.
+uint32_t memory_release_all() {
+    if (R.cmd != nullptr) {
+        dkCmdBufDestroy(R.cmd);
+        R.cmd = nullptr;
+    }
+    std::vector<DkMemBlock> blocks;
+    {
+        std::lock_guard<std::mutex> lock(g_liveBlocksMutex);
+        blocks.swap(g_liveBlocks);
+    }
+    for (DkMemBlock b : blocks) dkMemBlockDestroy(b);
+    for (Slot& s : g_slots) {
+        s.cmdOverflow.clear();
+        s.retired.clear();
+        s.retiredBlocks.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_deferredMutex);
+        g_deferredBlocks.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_heapMutex);
+        g_chunks.clear();
+    }
+    g_stream = g_cmdMem = g_code = g_descriptors = nullptr;
+    g_streamCpu = nullptr;
+    return uint32_t(blocks.size());
 }
 
 }  // namespace swdk

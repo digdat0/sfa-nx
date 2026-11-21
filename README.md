@@ -41,12 +41,12 @@ sdmc:/switch/SFA-NX/
 
 Press **−** in game to open the options menu.
 
-- **Game**: Show FPS, Invert look, HD textures, Button mapping, Updates.
+- **Game**: Show FPS, Invert Look, HD Textures, Language, Button Mapping, Updates.
 - **Debug**: performance and renderer settings for testing. Hidden unless `config/switch_menu.ini` contains
   the line `debug_menu=1`.
 
 Default controls follow the GameCube layout: ZL / ZR are the L / R triggers and R is Z. You can change them
-under **Button mapping**.
+under **Button Mapping**.
 
 ## Updates
 
@@ -61,7 +61,7 @@ SFA-NX supports the community HD texture pack.
 1. Download the pack from [GameBanana](https://gamebanana.com/mods/151176).
 2. Open the `GSA` folder inside the download and copy everything in it (`Bosses`, `Cape Claw`, ...) into
    `sdmc:/switch/SFA-NX/mods/hd/`.
-3. HD textures are on by default. You can turn them off with **−** → **HD textures**; the change applies at
+3. HD textures are on by default. You can turn them off with **−** → **HD Textures**; the change applies at
    the next start.
 
 ## Building

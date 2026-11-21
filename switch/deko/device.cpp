@@ -718,7 +718,9 @@ extern "C" void aurora_switch_dk_init(uint32_t gxConfigVersion) {
     shaders_init(gxConfigVersion);
     // The boot screen from the first frame on; Aurora's shader preload fills its bar. It uses the
     // embedded DKSH only, no Dawn, Tint or uam.
-    aurora_switch_dk_boot_screen("LOADING", -1.0f, nullptr, nullptr);
+    // The title names the game (upper case: the boot font has no lower-case glyphs). 26 characters at
+    // scale 6 is 630 px wide, inside the 720p window.
+    aurora_switch_dk_boot_screen("STARFOX ADVENTURES LOADING", -1.0f, nullptr, nullptr);
     dklog("boot screen submitted using embedded native shaders");
     g_heapAfterSetup = heap_never_used_mib();
     dklog("set-up cost: %zu MiB of heap (never used: %zu MiB before, %zu MiB after), %.0f ms",
@@ -781,9 +783,27 @@ extern "C" void aurora_switch_dk_compile_boost(bool on) { shader_compile_boost(o
 extern "C" void aurora_switch_dk_shutdown(void) {
     if (R.queue == nullptr) return;
     dkQueueWaitIdle(R.queue);
+    shaders_shutdown();  // the uam worker must not outlive the process image (Restart returns to hbloader)
     if (g_swapchain != nullptr) {
         dkSwapchainDestroy(g_swapchain);  // gives the window's buffers back (nwindowReleaseBuffers)
         g_swapchain = nullptr;
     }
     dklog("shut down after %llu frames", (unsigned long long)R.frame);
+}
+
+// Restart (vi_shim.c), after aurora_shutdown has released Aurora's textures and buffers: frees all GPU
+// memory, then the queue and the device, like MKDD-NX's gfx_close. Memory still locked to the GPU would
+// stop hbloader mapping the next NRO (2001-0106 inside hbl). The normal quit ends the process instead and
+// doesn't need this.
+extern "C" void aurora_switch_dk_release_all(void) {
+    if (R.device == nullptr) return;
+    if (R.queue != nullptr) dkQueueWaitIdle(R.queue);
+    const uint32_t blocks = memory_release_all();
+    if (R.queue != nullptr) {
+        dkQueueDestroy(R.queue);
+        R.queue = nullptr;
+    }
+    dkDeviceDestroy(R.device);
+    R.device = nullptr;
+    dklog("released for restart: %u memory blocks, queue and device", blocks);
 }

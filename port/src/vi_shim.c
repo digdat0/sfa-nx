@@ -14,6 +14,17 @@
 #include "foxhollow_splash.h"
 #include "shim_log.h"
 
+#ifdef __SWITCH__
+/* Restart support for shutdown_and_exit: switch/src/updater_switch.cpp (relaunch requested) and
+   switch/src/clang_tls_switch.c (end every thread, then return to hbloader). */
+int sfaRelaunchPending(void);
+int kartpad_end_threads(void);
+void aurora_switch_dk_release_all(void); /* switch/deko/device.cpp: frees GPU memory, queue, device */
+void sfaSwitchMenuReleaseServices(void); /* switch/src/switch_menu.cpp: closes apm and clkrst */
+unsigned int romfsUnmount(const char* name); /* libnx; romfsExit() is a macro for romfsUnmount("romfs") */
+__attribute__((noreturn)) void kartpad_exit_to_loader(void);
+#endif
+
 typedef void (*VIRetraceCallback)(u32 retraceCount);
 
 #if defined(FOXHOLLOW_DEBUG_SHORTCUTS)
@@ -81,10 +92,30 @@ static void wait_for_retrace_deadline(void) {
 }
 
 static void shutdown_and_exit(void) {
+  /* Drop the "interrupts off" lock (the audio thread needs it to finish its pump), then stop that thread
+     before anything it touches is torn down. */
+  (void)fhIrqSuspend();
+  fhAIShutdown();
   fhAutosaveShutdown();
   fhModsShutdown();
   aurora_dvd_close();
   aurora_shutdown();
+#ifdef __SWITCH__
+  /* The menu's Restart: once every thread has ended, return to hbloader so it starts the NRO again. With a
+     thread still running that would execute the unloaded image, so then end the process as before. */
+  if (sfaRelaunchPending()) {
+    fhMovieShutdown();
+    if (kartpad_end_threads() == 0) {
+      /* No thread can render any more: give the GPU memory back, or hbloader can't map the next NRO
+         over heap pages still locked to the GPU (hbl aborts with 2001-0106). */
+      aurora_switch_dk_release_all();
+      /* Services and files left open would outlive this NRO in hbloader's process (see the function). */
+      sfaSwitchMenuReleaseServices();
+      romfsUnmount("romfs"); /* main_sfa.cpp mounted it; its NRO file handle would leak */
+      kartpad_exit_to_loader();
+    }
+  }
+#endif
   exit(0);
 }
 

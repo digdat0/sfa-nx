@@ -76,6 +76,9 @@ std::atomic<int> g_inFlight{0};
 std::atomic<unsigned> g_compiledCount{0};
 uint64_t g_compileNs = 0, g_compileMaxNs = 0;  // uam time per shader (worker only)
 bool g_workerUp = false;
+// shaders_shutdown asks the worker to end (g_workerStop); the worker sets g_workerDone on its way out.
+std::atomic<bool> g_workerStop{false};
+std::atomic<bool> g_workerDone{false};
 std::atomic<Handle> g_workerHandle{INVALID_HANDLE};
 uint64_t g_compilerId = 0;
 std::mutex g_cacheMutex;
@@ -234,7 +237,8 @@ void* worker_main(void*) {
     dklog("shaders: uam worker started (priority 0x%X, %zu MiB stack); self-test %s (%zu bytes) in %.1f ms",
           kMaxThreadPriority, kWorkerStack >> 20, test.ok ? "compiled" : "FAILED", test.dksh.size(),
           double(now_ns() - t0) / 1e6);
-    for (;;) {
+    // Runs until shaders_shutdown (the menu's Restart has to end every thread before returning to hbloader).
+    while (!g_workerStop.load(std::memory_order_acquire)) {
         save_usage();
         bool drawWaits;
         {
@@ -245,8 +249,11 @@ void* worker_main(void*) {
         Job job;
         {
             std::unique_lock<std::mutex> lock(g_jobMutex);
-            if (!g_jobCv.wait_for(lock, std::chrono::seconds(5), [] { return !g_foreground.empty() || !g_background.empty(); }))
+            if (!g_jobCv.wait_for(lock, std::chrono::seconds(5), [] {
+                    return !g_foreground.empty() || !g_background.empty() || g_workerStop.load();
+                }))
                 continue;
+            if (g_workerStop.load()) break;  // shutting down: queued jobs are dropped
             take_job(&job);
             g_inFlight.store(1, std::memory_order_relaxed);
         }
@@ -299,6 +306,10 @@ void* worker_main(void*) {
                   stageCount[1], avg(stageNs[1], stageCount[1]) / 1e6, avg(stageGlsl[1], stageCount[1]) / 1024);
         }
     }
+    // Stopped: write what is still queued for the card, then report the exit to shaders_shutdown.
+    flush_writes();
+    save_usage();
+    g_workerDone.store(true, std::memory_order_release);
     return nullptr;
 }
 
@@ -527,6 +538,16 @@ void shader_compile_boost(bool on) {
     const Result rc = svcSetThreadPriority(worker, on ? kBoostThreadPriority : kMaxThreadPriority);
     dklog("shaders: uam worker priority 0x%X (%s)%s", on ? kBoostThreadPriority : kMaxThreadPriority,
           on ? "boot preload" : "background", R_FAILED(rc) ? " FAILED" : "");
+}
+
+// At exit (aurora_switch_dk_shutdown): ends the uam worker, waiting up to 3 s for a compile in progress.
+void shaders_shutdown() {
+    if (!g_workerUp) return;
+    g_workerStop.store(true, std::memory_order_release);
+    g_jobCv.notify_all();
+    for (int i = 0; i < 300 && !g_workerDone.load(std::memory_order_acquire); ++i) svcSleepThread(10000000);
+    dklog("shaders: uam worker %s", g_workerDone.load() ? "ended" : "did not end within 3 s");
+    g_workerUp = false;
 }
 
 // Startup: count the shaders the seed loaded, handle a pending "Clear shader cache", load dksh_local.bin,

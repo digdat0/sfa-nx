@@ -19,6 +19,9 @@ static SDL_Semaphore* sStart;
 static SDL_AtomicInt sBusy;
 static int (*sJob)(int);
 static int sFailed;
+/* fhMovieShutdown sets sQuit; the worker sets sExited on its way out. */
+static SDL_AtomicInt sQuit;
+static SDL_AtomicInt sExited;
 
 /* Worker loop: runs on core 2 at priority 0x2D (just below the game thread) on Switch. */
 static int movieWorkerMain(void* unused) {
@@ -29,12 +32,30 @@ static int movieWorkerMain(void* unused) {
 #endif
   for (;;) {
     SDL_WaitSemaphore(sStart);
+    if (SDL_GetAtomicInt(&sQuit) != 0) {
+      break; /* fhMovieShutdown */
+    }
     if (sJob != NULL) {
       sJob(1);
     }
     SDL_SetAtomicInt(&sBusy, 0);
   }
+  SDL_SetAtomicInt(&sExited, 1);
   return 0;
+}
+
+/* At exit: ends the worker (after its current job, waiting up to 2 s), so no thread outlives the process
+   image when the menu's Restart returns to hbloader. */
+void fhMovieShutdown(void) {
+  if (sThread == NULL) {
+    return;
+  }
+  SDL_SetAtomicInt(&sQuit, 1);
+  SDL_SignalSemaphore(sStart);
+  for (int i = 0; i < 200 && SDL_GetAtomicInt(&sExited) == 0; ++i) {
+    SDL_Delay(10);
+  }
+  sThread = NULL; /* detached: its record is reaped by clang_tls_switch.c on Switch */
 }
 
 /* Creates the worker on first use; remembers a failure so it is not retried every frame. */

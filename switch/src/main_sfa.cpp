@@ -58,6 +58,37 @@ extern "C" const char sfa_nx_build_stamp[] = __DATE__ " " __TIME__;
 
 // One open/write/close per marker so a crash leaves every earlier line on the card.
 // (Named melee_boot_trace because the shared Switch layer, clang_tls_switch.c, calls it.)
+extern "C" void melee_boot_trace(const char* fmt, ...);
+
+// Logs how many sessions, events, threads and transfer memories the process holds against its limits.
+// After the menu's Restart, hbloader's process carries over whatever the previous NRO left open, so
+// numbers that grow from one relaunch to the next point at a leak (one leaked apm session per run made
+// the second relaunch abort in applet init, 2345-0031).
+static void trace_resource_limits() {
+    Handle limit = INVALID_HANDLE;
+    u64 info = 0;
+    if (R_FAILED(svcGetInfo(&info, InfoType_ResourceLimit, CUR_PROCESS_HANDLE, 0))) {
+        return;
+    }
+    limit = static_cast<Handle>(info);
+    if (limit == INVALID_HANDLE) {
+        return;
+    }
+    // Current and maximum value of one resource; -1 when the kernel refuses the query.
+    auto value = [limit](LimitableResource r, bool max) -> long long {
+        s64 v = -1;
+        Result rc = max ? svcGetResourceLimitLimitValue(&v, limit, r) : svcGetResourceLimitCurrentValue(&v, limit, r);
+        return R_SUCCEEDED(rc) ? static_cast<long long>(v) : -1;
+    };
+    melee_boot_trace("   limits sessions %lld/%lld events %lld/%lld threads %lld/%lld tmem %lld/%lld",
+                     value(LimitableResource_Sessions, false), value(LimitableResource_Sessions, true),
+                     value(LimitableResource_Events, false), value(LimitableResource_Events, true),
+                     value(LimitableResource_Threads, false), value(LimitableResource_Threads, true),
+                     value(LimitableResource_TransferMemories, false),
+                     value(LimitableResource_TransferMemories, true));
+    svcCloseHandle(limit);  // svcGetInfo handed us a new handle; closing it keeps this probe leak-free
+}
+
 extern "C" void melee_boot_trace(const char* fmt, ...) {
     static bool truncated = false;
     const int fd = open(LOG_DIR "/boot.txt", O_WRONLY | O_CREAT | (truncated ? O_APPEND : O_TRUNC), 0644);
@@ -96,9 +127,25 @@ DiscKind disc_kind(const char* name) {
     return strcasecmp(dot, ".rvz") == 0 ? DiscKind::Rvz : DiscKind::None;
 }
 
-// The Star Fox Adventures image next to the NRO (or in SFA_DIR). A GameCube disc header starts with the
-// 6-byte game ID: "GSA" + region letter + "01" for this game. In an RVZ file the disc header is copied
-// at offset 0x58 (after the 0x48-byte file head and 0x10 bytes of the disc struct), behind "RVZ\x01".
+// Reads a disc image's 6-byte game ID into id (not NUL-terminated); false when the file can't be read or an
+// .rvz lacks its magic. A GameCube disc header starts with the game ID: "GSA" + region letter + "01" for
+// this game. In an RVZ file the disc header is copied at offset 0x58 (after the 0x48-byte file head and
+// 0x10 bytes of the disc struct), behind "RVZ\x01". Used both to pick the image and to spot the PAL disc.
+bool read_game_id(const std::string& path, DiscKind kind, char id[6]) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        return false;
+    }
+    char head[0x58 + 6] = {};
+    const size_t want = kind == DiscKind::Rvz ? sizeof(head) : 6;
+    const bool read_ok = std::fread(head, 1, want, f) == want;
+    std::fclose(f);
+    const bool magic_ok = kind != DiscKind::Rvz || std::memcmp(head, "RVZ\x01", 4) == 0;
+    std::memcpy(id, kind == DiscKind::Rvz ? head + 0x58 : head, 6);
+    return read_ok && magic_ok;
+}
+
+// The Star Fox Adventures image next to the NRO (or in SFA_DIR): the first file whose game ID is GSA?01.
 // An .iso/.gcm wins over an .rvz when both are there, because it needs no decompression.
 std::string find_disc(const std::string& dir) {
     DIR* d = opendir(dir.c_str());
@@ -113,17 +160,8 @@ std::string find_disc(const std::string& dir) {
             continue;
         }
         std::string path = dir + "/" + e->d_name;
-        FILE* f = std::fopen(path.c_str(), "rb");
-        if (f == nullptr) {
-            continue;
-        }
-        char head[0x58 + 6] = {};
-        const size_t want = kind == DiscKind::Rvz ? sizeof(head) : 6;
-        const bool read_ok = std::fread(head, 1, want, f) == want;
-        std::fclose(f);
-        const char* id = kind == DiscKind::Rvz ? head + 0x58 : head;
-        const bool magic_ok = kind != DiscKind::Rvz || std::memcmp(head, "RVZ\x01", 4) == 0;
-        if (read_ok && magic_ok && std::memcmp(id, "GSA", 3) == 0 && std::memcmp(id + 4, "01", 2) == 0) {
+        char id[6] = {};
+        if (read_game_id(path, kind, id) && std::memcmp(id, "GSA", 3) == 0 && std::memcmp(id + 4, "01", 2) == 0) {
             if (kind == DiscKind::Plain) {
                 found = path; // an ISO is the best case: stop looking
                 break;
@@ -311,6 +349,7 @@ extern "C" int main(int argc, char** argv) {
         }
     }
     melee_boot_trace("01 main  build %s  argv0=%s", kBuildStamp, argc > 0 && argv[0] ? argv[0] : "<null>");
+    trace_resource_limits();
 
     // Applet mode (started from the Album) gets far less memory than title takeover (a full application),
     // not enough for the game, so refuse to start there with an explanation instead of crashing later.
@@ -363,10 +402,12 @@ extern "C" int main(int argc, char** argv) {
     // Game text language. Foxhollow runs the USA code, which has no language menu and reads the language
     // only from FOXHOLLOW_LANGUAGE (port/src/foxhollow_config.c), so the PAL disc's other languages need
     // the - menu's Language setting (switch_menu.ini language=, the game's numbering) passed on here.
-    if (FILE* f = std::fopen(disc.c_str(), "rb")) {
+    // The ID comes from read_game_id, which also looks inside .rvz files (their first bytes are the RVZ
+    // header, not the disc: reading those made an RVZ of the PAL disc look like another region).
+    {
         char id[6] = {};
-        g_disc_pal = std::fread(id, 1, sizeof(id), f) == sizeof(id) && std::memcmp(id, "GSAP01", 6) == 0;
-        std::fclose(f);
+        g_disc_pal = read_game_id(disc, disc_kind(disc.c_str()), id) && std::memcmp(id, "GSAP01", 6) == 0;
+        melee_boot_trace("   disc id %.6s%s", id, g_disc_pal ? " (PAL)" : "");
     }
     if (g_disc_pal) {
         static const char* const kCodes[6] = {"en", "fr", "de", "it", nullptr, "es"};

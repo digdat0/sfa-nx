@@ -415,6 +415,17 @@ void fhAISetThreaded(int on) {
   }
 }
 
+/* Stops the audio thread and waits for it to end. Called before shutdown: the thread otherwise keeps
+   polling sOutputStream after aurora_shutdown/SDL_Quit freed it (the crash on Restart/exit). The caller
+   must not hold the "interrupts off" lock, or the thread could wait on it forever. */
+void fhAIShutdown(void) {
+  SDL_SetAtomicInt(&sThreadStop, 1);
+  if (sThread != NULL) {
+    SDL_WaitThread(sThread, NULL);
+    sThread = NULL;
+  }
+}
+
 /* Called once per game frame from VIWaitForRetrace: only pumps when the audio thread is not doing it. */
 void fhAIPump(void) {
 #if defined(FOXHOLLOW_DEBUG_SHORTCUTS)

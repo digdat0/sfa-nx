@@ -94,6 +94,7 @@ void fhAIPump(void);
 /* Audio mixing on its own thread (default on; the - menu "Audio thread" item on Switch). */
 int fhAIThreaded(void);
 void fhAISetThreaded(int on);
+void fhAIShutdown(void); /* stops and joins the audio thread before exit */
 /* os_shim.c: the "interrupts off" lock shared with the audio thread. */
 void fhIrqEnterHandler(void);
 void fhIrqLeaveHandler(void);
@@ -102,6 +103,7 @@ void fhIrqResume(int held);
 int fhMovieDecodeStart(int (*job)(int));
 int fhMovieDecodeBusy(void);
 void fhMovieDecodeWait(void);
+void fhMovieShutdown(void); /* ends the movie worker thread (at exit) */
 uintptr_t fhAIGetDMAStartAddr(void);
 int fhAIPrepareStream(void* fileInfo);
 void fhControlsInit(void);

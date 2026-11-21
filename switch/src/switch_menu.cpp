@@ -1,5 +1,6 @@
-// SFA-NX's - (minus) menu, drawn with Aurora's Dear ImGui. Two tabs, switched with L / R:
-//   Game:  Show FPS, Invert look, HD textures, Button mapping, Updates.
+// SFA-NX's - (minus) menu, drawn with Aurora's Dear ImGui draw lists in the style of the game's own menus
+// (see "menu look" below). Two tabs, switched with L / R:
+//   Game:  Show FPS, Invert Look, HD Textures, Language, Button Mapping, Updates.
 //   Debug: (only with debug_menu=1 in switch_menu.ini, off by default) the profiler, thread placement (perf_switch.cpp policies, switched live), the audio thread
 //          (port/src/ai_shim.c), frame overlap / frame step / pacing, the renderer, GPU clock and GPU
 //          options, the shader tour and clearing the shader cache.
@@ -70,7 +71,90 @@ bool sBootHdTextures = true;
 int sLanguage = 0;
 int sBootLanguage = 0;
 constexpr int kLanguages[] = {0, 1, 2, 3, 5};
-constexpr const char* kLanguageNames[] = {"English", "French", "German", "Italian", "", "Spanish"};
+// Each language under its own name, as language pickers usually show them.
+constexpr const char* kLanguageNames[] = {"English", "Français", "Deutsch", "Italiano", "", "Español"};
+
+// Menu text for the Game tab, the title and the button mapping page in the game's other languages (the Debug
+// tab stays English: it is for testing). Keyed by the English text; tr() falls back to English for anything
+// missing. Columns: French, German, Italian, Spanish. The default ImGui font covers Latin-1, so the accents
+// render. Format strings keep their %s / %d in the same order.
+struct Translation {
+    const char* english;
+    const char* other[4];
+};
+constexpr Translation kTranslations[] = {
+    {"STAR FOX ADVENTURES OPTIONS", {"OPTIONS DE STAR FOX ADVENTURES", "STAR FOX ADVENTURES OPTIONEN",
+                                     "OPZIONI DI STAR FOX ADVENTURES", "OPCIONES DE STAR FOX ADVENTURES"}},
+    {"BUTTON MAPPING", {"CONFIGURATION DES BOUTONS", "TASTENBELEGUNG", "CONFIGURAZIONE TASTI",
+                        "CONFIGURACIÓN DE BOTONES"}},
+    {"Show FPS", {"Afficher les FPS", "FPS anzeigen", "Mostra FPS", "Mostrar FPS"}},
+    {"Invert Look", {"Inverser la caméra", "Kamera invertieren", "Inverti visuale", "Invertir cámara"}},
+    {"HD Textures", {"Textures HD", "HD-Texturen", "Texture HD", "Texturas HD"}},
+    {"Language", {"Langue", "Sprache", "Lingua", "Idioma"}},
+    {"Button Mapping", {"Configuration des boutons", "Tastenbelegung", "Configurazione tasti",
+                        "Configuración de botones"}},
+    {"Updates", {"Mises à jour", "Updates", "Aggiornamenti", "Actualizaciones"}},
+    {"Close", {"Fermer", "Schließen", "Chiudi", "Cerrar"}},
+    {"Restart", {"Redémarrer", "Neu starten", "Riavvia", "Reiniciar"}},
+    {"Applies the changes", {"Applique les changements", "Übernimmt die Änderungen", "Applica le modifiche",
+                             "Aplica los cambios"}},
+    {"On", {"Oui", "An", "Sì", "Sí"}},
+    {"Off", {"Non", "Aus", "No", "No"}},
+    {"  (restart)", {"  (redémarrage)", "  (Neustart)", "  (riavvio)", "  (reinicio)"}},
+    {"PAL disc only", {"Disque PAL uniquement", "Nur PAL-Disc", "Solo disco PAL", "Solo disco PAL"}},
+    {"Custom", {"Personnalisé", "Eigene", "Personalizzata", "Personalizada"}},
+    {"-Back", {"-Retour", "-Zurück", "-Indietro", "-Atrás"}},
+    {"-Select", {"-Choisir", "-Auswählen", "-Seleziona", "-Seleccionar"}},
+    {"-Remap", {"-Changer", "-Ändern", "-Cambia", "-Cambiar"}},
+    // updater (Updates row)
+    {"v%s  A: check", {"v%s  A : rechercher", "v%s  A: prüfen", "v%s  A: controlla", "v%s  A: buscar"}},
+    {"Checking...", {"Recherche...", "Prüfe...", "Controllo...", "Buscando..."}},
+    {"%s available  A: download", {"%s disponible  A : télécharger", "%s verfügbar  A: herunterladen",
+                                   "%s disponibile  A: scarica", "%s disponible  A: descargar"}},
+    {"Downloading %d%%", {"Téléchargement %d%%", "Download %d%%", "Download %d%%", "Descargando %d%%"}},
+    {"%s downloaded  A: restart", {"%s téléchargé  A : redémarrer", "%s geladen  A: neu starten",
+                                   "%s scaricato  A: riavvia", "%s descargado  A: reiniciar"}},
+    {"Up to date (v%s)", {"À jour (v%s)", "Aktuell (v%s)", "Aggiornato (v%s)", "Actualizado (v%s)"}},
+    {"No network", {"Pas de réseau", "Kein Netzwerk", "Nessuna rete", "Sin red"}},
+    // button mapping page: rows, prompts and control names (GameCube and Switch share the D-Pad names)
+    {"Reset To Defaults", {"Réinitialiser", "Standard wiederherstellen", "Ripristina predefiniti",
+                           "Restablecer valores"}},
+    {"Back", {"Retour", "Zurück", "Indietro", "Atrás"}},
+    {"No controller on port 1", {"Aucune manette sur le port 1", "Kein Controller an Port 1",
+                                 "Nessun controller sulla porta 1", "No hay mando en el puerto 1"}},
+    {"Press a button... (- cancels)", {"Appuyez sur un bouton... (- annule)", "Taste drücken... (- bricht ab)",
+                                       "Premi un tasto... (- annulla)", "Pulsa un botón... (- cancela)"}},
+    {"Switch held: %s   (* = changed)", {"Switch appuyé : %s   (* = modifié)", "Switch gedrückt: %s   (* = geändert)",
+                                         "Switch premuti: %s   (* = modificato)", "Switch pulsado: %s   (* = cambiado)"}},
+    {"D-Pad Up", {"Croix haut", "Steuerkreuz oben", "Croce su", "Cruceta arriba"}},
+    {"D-Pad Down", {"Croix bas", "Steuerkreuz unten", "Croce giù", "Cruceta abajo"}},
+    {"D-Pad Left", {"Croix gauche", "Steuerkreuz links", "Croce sinistra", "Cruceta izquierda"}},
+    {"D-Pad Right", {"Croix droite", "Steuerkreuz rechts", "Croce destra", "Cruceta derecha"}},
+    {"Left stick press", {"Clic stick gauche", "Linken Stick drücken", "Pressione levetta sinistra",
+                          "Pulsar stick izquierdo"}},
+    {"Right stick press", {"Clic stick droit", "Rechten Stick drücken", "Pressione levetta destra",
+                           "Pulsar stick derecho"}},
+    {"(none)", {"(aucun)", "(keine)", "(nessuno)", "(ninguno)"}},
+};
+
+// Translates menu text into the language the game's text is in: the PAL disc's language as it was at start
+// (the game only changes language at the next start, so the menu matches what the game shows), English on
+// other discs. Returns the English text when there is no translation.
+const char* tr(const char* english) {
+    if (!sfaDiscIsPal()) {
+        return english;
+    }
+    const int column = sBootLanguage == 5 ? 3 : sBootLanguage - 1;  // game numbers 1, 2, 3, 5 -> columns 0..3
+    if (column < 0 || column > 3) {
+        return english;
+    }
+    for (const Translation& t : kTranslations) {
+        if (std::strcmp(t.english, english) == 0) {
+            return t.other[column];
+        }
+    }
+    return english;
+}
 int sHdTextureMb = 512;
 int sBootCompression = 0;
 bool sBootZcull = false;
@@ -116,6 +200,7 @@ enum Item {
     kItemTour,
     kItemShaderCache,
     kItemUpdate,
+    kItemRestart,  // only listed while a changed setting waits for a restart (see tab_items)
     kItemClose,
     kItemCount
 };
@@ -128,13 +213,29 @@ constexpr int kDebugItems[] = {kItemProfiler,    kItemThreads, kItemAudio, kItem
 constexpr const char* kTabNames[2] = {"Game", "Debug"};
 
 extern "C" void sfaUpdaterStatus(char* out, size_t size);
+extern "C" int sfaUpdaterState(int* percent, char* tag, size_t tagSize);
+extern "C" const char* sfaUpdaterVersion(void);
 extern "C" void sfaUpdaterActivate(void);
+extern "C" void sfaRelaunch(void);  // switch/src/updater_switch.cpp: quits and starts this NRO again
 
-// The rows of one tab and how many there are.
+bool restart_pending();
+
+// The rows of one tab and how many there are. While a changed setting needs a restart, a Restart row is
+// inserted just above Close (the last row of both tabs).
 const int* tab_items(int tab, int* count) {
-    *count = tab == 0 ? static_cast<int>(sizeof(kGameItems) / sizeof(kGameItems[0]))
-                      : static_cast<int>(sizeof(kDebugItems) / sizeof(kDebugItems[0]));
-    return tab == 0 ? kGameItems : kDebugItems;
+    static int rows[32];
+    const int* base = tab == 0 ? kGameItems : kDebugItems;
+    const int n = tab == 0 ? static_cast<int>(sizeof(kGameItems) / sizeof(kGameItems[0]))
+                           : static_cast<int>(sizeof(kDebugItems) / sizeof(kDebugItems[0]));
+    if (!restart_pending()) {
+        *count = n;
+        return base;
+    }
+    std::memcpy(rows, base, sizeof(int) * (n - 1));
+    rows[n - 1] = kItemRestart;
+    rows[n] = kItemClose;
+    *count = n + 1;
+    return rows;
 }
 
 // Threads: the placement policies offered, in menu order (perf_switch.cpp numbers: 3 tuned, 4 game,
@@ -390,6 +491,8 @@ constexpr u32 kGpuBoostFallback = 0x00020004;
 bool sApmReady;
 bool sApmSaved;
 u32 sApmOriginal;
+bool sClkrstTried;  // clkrstInitialize attempted (once, by log_clocks)
+bool sClkrstReady;  // clkrst open; closed again by sfaSwitchMenuReleaseServices
 
 // Current clock of one module (CPU, GPU, memory) in MHz, or 0 if clkrst is unavailable (as in Ryujinx).
 u32 clock_mhz(PcvModuleId module) {
@@ -404,7 +507,12 @@ u32 clock_mhz(PcvModuleId module) {
 
 // Logs the real clocks and the active apm configuration, to confirm a clock change took effect.
 void log_clocks(const char* when) {
-    static bool clkrstReady = R_SUCCEEDED(clkrstInitialize());
+    // Opened once on first use; the restart path closes it (sfaSwitchMenuReleaseServices).
+    if (!sClkrstTried) {
+        sClkrstTried = true;
+        sClkrstReady = R_SUCCEEDED(clkrstInitialize());
+    }
+    const bool clkrstReady = sClkrstReady;
     ApmPerformanceMode mode = ApmPerformanceMode_Invalid;
     u32 conf = 0;
     if (sApmReady) {
@@ -545,6 +653,13 @@ void load_settings_done() {
 
 // Rewrites switch_menu.ini with every setting, with # comment lines explaining the values for anyone
 // editing it by hand. Test-only keys (shader_tour, profiler) are never written.
+// True when a setting that only takes effect at start differs from what this run started with (the ones the
+// menu marks "(restart)"), or the shader cache is set to be cleared.
+bool restart_pending() {
+    return sCompression != sBootCompression || sZcull != sBootZcull || sTexBc1 != sBootTexBc1 ||
+           sHdTextures != sBootHdTextures || sLanguage != sBootLanguage || sClearShaders;
+}
+
 void save_settings() {
     FILE* f = std::fopen(kSettingsPath, "w");
     if (f == nullptr) {
@@ -765,6 +880,11 @@ void update_input() {
     } else if (pressed[a] || pressed[SDL_GAMEPAD_BUTTON_DPAD_LEFT] || pressed[SDL_GAMEPAD_BUTTON_DPAD_RIGHT]) {
         if (item == kItemClose) {
             sOpen = !pressed[a];
+        } else if (item == kItemRestart) {
+            if (pressed[a]) {
+                save_settings();  // already saved on each change; again in case, before the process ends
+                sfaRelaunch();
+            }
         } else if (item == kItemUpdate) {
             if (pressed[a]) {
                 sfaUpdaterActivate();
@@ -833,10 +953,265 @@ void draw_profiler(float top) {
     }
 }
 
-// Menu colours: normal rows, the selected row, and a pressed button on the mapping page.
-const ImVec4 kWhite(1.0f, 1.0f, 1.0f, 1.0f);
-const ImVec4 kGold(1.0f, 0.8f, 0.25f, 1.0f);
-const ImVec4 kGreen(0.35f, 1.0f, 0.45f, 1.0f);
+// ---- menu look ------------------------------------------------------------------------------------------
+// The menu copies the game's own front-end panels (its GAME SELECT screen): a riveted grey metal frame with
+// the title on a raised plate in the top bar, a translucent green screen with faint scanlines, white Title
+// Case text with a soft drop shadow, values right-aligned, a blue bar across the selected row, and round
+// red B / green A button prompts at the bottom of the screen. It is drawn straight into ImGui's foreground
+// draw list (no ImGui widgets), sized from the screen height so it looks the same docked and handheld.
+
+// One line of the panel: a selectable row (label left, value right), or a smaller read-only info line.
+struct PanelRow {
+    const char* label = "";
+    char value[64] = "";
+    bool selected = false;
+    bool gapBefore = false;  // an empty line above (the game sets "Exit To Desktop" apart the same way)
+    bool info = false;       // small read-only text (the mapping page's stick and button readouts)
+    bool pinned = false;     // kept at the bottom of the screen and never scrolled (Restart / Close); list last
+    ImU32 valueColor = IM_COL32(255, 255, 255, 255);
+};
+
+// A footer prompt: a round button with its letter, then the action ("-Back"); action may be empty.
+struct PanelHint {
+    const char* button;
+    ImU32 color;
+    const char* action;
+};
+
+constexpr int kMaxPanelRows = 24;
+constexpr ImU32 kTextWhite = IM_COL32(255, 255, 255, 255);
+constexpr ImU32 kTextShadow = IM_COL32(0, 25, 0, 170);
+constexpr ImU32 kInfoText = IM_COL32(215, 255, 215, 255);
+constexpr ImU32 kPressedGreen = IM_COL32(150, 255, 120, 255);
+constexpr ImU32 kButtonRed = IM_COL32(205, 40, 55, 255);
+constexpr ImU32 kButtonGreen = IM_COL32(60, 200, 150, 255);
+constexpr ImU32 kButtonGrey = IM_COL32(120, 128, 136, 255);
+// Height of the panel's parts in row heights, used to fit the panel to the screen.
+constexpr float kTopBar = 1.25f;    // top metal bar with the title plate
+// Bottom metal bar: the grey footer holding the button prompts, outside the green screen.
+constexpr float kBottomBar = 1.3f;
+constexpr float kPadRows = 0.35f;   // screen padding above the first row and below the prompts
+constexpr float kGapRows = 0.8f;    // a gapBefore line
+constexpr float kInfoRows = 0.8f;   // an info line
+
+float text_width(float size, const char* text) {
+    return ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, text).x;
+}
+
+// Text with the game's soft dark drop shadow.
+void shadow_text(ImDrawList* list, float size, ImVec2 pos, ImU32 color, const char* text) {
+    const float off = std::max(1.0f, size * 0.07f);
+    list->AddText(ImGui::GetFont(), size, ImVec2(pos.x + off, pos.y + off), kTextShadow, text);
+    list->AddText(ImGui::GetFont(), size, pos, color, text);
+}
+
+// A rivet on the frame: a dark disc with a light upper-left highlight and a dark centre.
+void rivet(ImDrawList* list, ImVec2 c, float r) {
+    list->AddCircleFilled(c, r, IM_COL32(40, 44, 50, 255));
+    list->AddCircleFilled(ImVec2(c.x - r * 0.2f, c.y - r * 0.2f), r * 0.7f, IM_COL32(185, 192, 200, 255));
+    list->AddCircleFilled(c, r * 0.38f, IM_COL32(90, 96, 104, 255));
+}
+
+// A green indicator light centred at (x, y), like the ones on the game's frame, with a soft glow.
+void indicator(ImDrawList* list, float x, float y, float w, float h) {
+    list->AddRectFilled(ImVec2(x - w * 0.7f, y - h * 1.6f), ImVec2(x + w * 0.7f, y + h * 1.6f), IM_COL32(90, 255, 110, 45),
+                        h * 1.6f);
+    list->AddRectFilled(ImVec2(x - w * 0.5f, y - h * 0.5f), ImVec2(x + w * 0.5f, y + h * 0.5f), IM_COL32(110, 255, 120, 255),
+                        h * 0.5f);
+}
+
+// A footer button: coloured disc, dark rim, glossy highlight and the white letter.
+void round_button(ImDrawList* list, ImVec2 c, float r, ImU32 color, const char* letter) {
+    list->AddCircleFilled(c, r, color);
+    list->AddCircle(c, r, IM_COL32(0, 0, 0, 140), 0, std::max(1.5f, r * 0.12f));
+    list->AddCircle(c, r * 0.86f, IM_COL32(255, 255, 255, 90), 0, std::max(1.0f, r * 0.08f));
+    list->AddCircleFilled(ImVec2(c.x - r * 0.15f, c.y - r * 0.35f), r * 0.42f, IM_COL32(255, 255, 255, 60));
+    const float size = r * 1.25f;
+    shadow_text(list, size, ImVec2(c.x - text_width(size, letter) * 0.5f, c.y - size * 0.5f), kTextWhite, letter);
+}
+
+// Draws the whole panel centred on the screen. title goes on the top plate, tabs (or null) on the left of the
+// top bar. minUnits is the content height in rows to reserve, so tabs of different lengths keep one size.
+void draw_panel(const char* title, const char* tabs, const PanelRow* rows, int rowCount, const PanelHint* hints,
+                int hintCount, float minUnits) {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    // Heights in rows: the scrolling body and the pinned group at the bottom (each with its gap lines).
+    auto rowUnits = [](const PanelRow& r) { return (r.gapBefore ? kGapRows : 0.0f) + (r.info ? kInfoRows : 1.0f); };
+    float bodyUnits = 0.0f;
+    float pinUnits = 0.0f;
+    for (int i = 0; i < rowCount; ++i) {
+        (rows[i].pinned ? pinUnits : bodyUnits) += rowUnits(rows[i]);
+    }
+    float units = std::max(bodyUnits + pinUnits, minUnits);
+    // Row height: at most 6.2% of the screen, smaller when the panel would not fit 94% of its height, but
+    // never under 5%: past that the panel stops growing and the body scrolls instead.
+    const float total = units + kTopBar + kBottomBar + 2.0f * kPadRows;
+    const float rh = std::max(display.y * 0.05f, std::min(display.y * 0.062f, display.y * 0.94f / total));
+    units = std::min(units, display.y * 0.94f / rh - kTopBar - kBottomBar - 2.0f * kPadRows);
+    const float font = rh * 0.74f;
+    const float infoFont = font * 0.8f;
+    const float titleFont = rh * 0.72f;
+    const float pad = font * 0.6f;
+    const float side = rh * 0.45f;
+
+    // Fixed width (1.2x the screen height, within 94% of its width), so the panel never changes size when a
+    // value gets longer (e.g. "(restart)" appearing). A row that would not fit is drawn smaller instead.
+    const float inner = std::min(display.y * 1.2f, display.x * 0.94f - 2.0f * side);
+
+    const float innerH = (units + 2.0f * kPadRows) * rh;  // green screen: the rows only
+    const float w = inner + 2.0f * side;
+    const float h = innerH + (kTopBar + kBottomBar) * rh;
+    const ImVec2 o0((display.x - w) * 0.5f, (display.y - h) * 0.5f);
+    const ImVec2 o1(o0.x + w, o0.y + h);
+    const ImVec2 i0(o0.x + side, o0.y + kTopBar * rh);
+    const ImVec2 i1(o1.x - side, i0.y + innerH);
+    ImDrawList* list = ImGui::GetForegroundDrawList();
+
+    // Metal frame: brushed grey gradient, dark outer outline, light inner bevel line.
+    list->AddRectFilledMultiColor(o0, o1, IM_COL32(168, 174, 182, 250), IM_COL32(168, 174, 182, 250),
+                                  IM_COL32(78, 83, 90, 250), IM_COL32(78, 83, 90, 250));
+    list->AddRect(o0, o1, IM_COL32(22, 25, 30, 255), 0.0f, 0, 3.0f);
+    list->AddRect(ImVec2(o0.x + 3, o0.y + 3), ImVec2(o1.x - 3, o1.y - 3), IM_COL32(215, 220, 228, 120), 0.0f, 0, 1.5f);
+    // Darker grooves along the side rails and across the bars, like the frame's panel seams.
+    const ImU32 groove = IM_COL32(50, 54, 60, 160);
+    list->AddLine(ImVec2(o0.x + side * 0.5f, i0.y), ImVec2(o0.x + side * 0.5f, i1.y), groove, 2.0f);
+    list->AddLine(ImVec2(o1.x - side * 0.5f, i0.y), ImVec2(o1.x - side * 0.5f, i1.y), groove, 2.0f);
+
+    // Title plate on the right of the top bar, raised: lighter gradient, dark outline, title right-aligned.
+    const float plateW = text_width(titleFont, title) + font * 1.6f;
+    const ImVec2 p0(o1.x - side * 0.6f - plateW, o0.y + kTopBar * rh * 0.12f);
+    const ImVec2 p1(o1.x - side * 0.6f, o0.y + kTopBar * rh * 0.88f);
+    list->AddRectFilledMultiColor(p0, p1, IM_COL32(200, 205, 212, 255), IM_COL32(200, 205, 212, 255),
+                                  IM_COL32(110, 116, 124, 255), IM_COL32(110, 116, 124, 255));
+    list->AddRect(p0, p1, IM_COL32(30, 33, 38, 255), 0.0f, 0, 2.0f);
+    const float titleY = (p0.y + p1.y - titleFont) * 0.5f;
+    list->AddText(ImGui::GetFont(), titleFont, ImVec2(p1.x - font * 0.8f - text_width(titleFont, title) + 2, titleY + 2),
+                  IM_COL32(20, 22, 26, 220), title);
+    list->AddText(ImGui::GetFont(), titleFont, ImVec2(p1.x - font * 0.8f - text_width(titleFont, title), titleY), kTextWhite,
+                  title);
+    if (tabs != nullptr) {
+        shadow_text(list, titleFont, ImVec2(i0.x + font * 0.4f, titleY), kTextWhite, tabs);
+    }
+
+    // Green screen: translucent gradient, faint scanlines every 3 px (at 720p), recessed dark edge.
+    list->AddRectFilledMultiColor(i0, i1, IM_COL32(45, 175, 75, 190), IM_COL32(45, 175, 75, 190),
+                                  IM_COL32(25, 125, 50, 205), IM_COL32(25, 125, 50, 205));
+    const float step = std::max(2.0f, display.y / 240.0f);
+    for (float y = i0.y + step; y < i1.y; y += step) {
+        list->AddLine(ImVec2(i0.x, y), ImVec2(i1.x, y), IM_COL32(0, 40, 0, 28), 1.0f);
+    }
+    list->AddRect(ImVec2(i0.x - 1, i0.y - 1), ImVec2(i1.x + 1, i1.y + 1), IM_COL32(18, 20, 24, 255), 0.0f, 0, 3.0f);
+
+    // Rivets in the corners and indicator lights in the middle of the top and bottom edges.
+    const float rr = side * 0.28f;
+    for (const ImVec2 c : {ImVec2(o0.x + side * 0.5f, o0.y + side * 0.5f), ImVec2(o1.x - side * 0.5f, o0.y + side * 0.5f),
+                           ImVec2(o0.x + side * 0.5f, o1.y - side * 0.5f), ImVec2(o1.x - side * 0.5f, o1.y - side * 0.5f)}) {
+        rivet(list, c, rr);
+    }
+    indicator(list, (o0.x + o1.x) * 0.5f, o0.y + rh * 0.08f, rh * 1.4f, rh * 0.14f);
+    indicator(list, (o0.x + o1.x) * 0.5f, o1.y - rh * 0.08f, rh * 1.4f, rh * 0.14f);
+
+    // The pinned rows sit at the bottom of the screen; the body scrolls in the space above them.
+    const float pinTop = i1.y - kPadRows * rh - pinUnits * rh;
+    const float bodyTop = i0.y + kPadRows * rh;
+    const float bodyH = pinTop - bodyTop;
+    // Scroll just enough to keep the selected body row in view (kept across frames; clamped to the content).
+    static float sScroll = 0.0f;
+    {
+        float top = 0.0f;
+        for (int i = 0; i < rowCount; ++i) {
+            if (rows[i].pinned) {
+                continue;
+            }
+            top += rows[i].gapBefore ? kGapRows * rh : 0.0f;
+            const float lh = rows[i].info ? kInfoRows * rh : rh;
+            if (rows[i].selected) {
+                sScroll = std::min(sScroll, top);
+                sScroll = std::max(sScroll, top + lh - bodyH);
+            }
+            top += lh;
+        }
+        sScroll = std::clamp(sScroll, 0.0f, std::max(0.0f, bodyUnits * rh - bodyH));
+    }
+
+    // Rows: the body from the top (clipped to its area, shifted by the scroll), then the pinned group.
+    float y = bodyTop - sScroll;
+    bool clipped = true;
+    list->PushClipRect(ImVec2(i0.x, bodyTop - kPadRows * rh), ImVec2(i1.x, pinTop), true);
+    for (int i = 0; i < rowCount; ++i) {
+        const PanelRow& r = rows[i];
+        if (r.pinned && clipped) {
+            list->PopClipRect();
+            clipped = false;
+            y = pinTop;
+        }
+        if (r.gapBefore) {
+            y += kGapRows * rh;
+        }
+        const float lh = r.info ? kInfoRows * rh : rh;
+        // Shrink this row's text when label + value would overlap in the fixed width.
+        float f = r.info ? infoFont : font;
+        const float need = text_width(f, r.label) + font * 1.5f + text_width(f, r.value) + 2.0f * pad;
+        if (need > inner) {
+            f *= (inner - 2.0f * pad - font * 1.5f) / (need - 2.0f * pad - font * 1.5f);
+        }
+        if (r.selected) {
+            // The game's selection bar: a blue band across the whole screen width with a light top edge.
+            list->AddRectFilledMultiColor(ImVec2(i0.x, y), ImVec2(i1.x, y + lh), IM_COL32(85, 180, 245, 240),
+                                          IM_COL32(85, 180, 245, 240), IM_COL32(35, 120, 210, 240),
+                                          IM_COL32(35, 120, 210, 240));
+            list->AddLine(ImVec2(i0.x, y), ImVec2(i1.x, y), IM_COL32(170, 220, 255, 200), 1.5f);
+        }
+        const float ty = y + (lh - f) * 0.5f;
+        shadow_text(list, f, ImVec2(i0.x + pad, ty), r.info ? kInfoText : kTextWhite, r.label);
+        if (r.value[0] != '\0') {
+            shadow_text(list, f, ImVec2(i1.x - pad - text_width(f, r.value), ty), r.valueColor, r.value);
+        }
+        y += lh;
+    }
+    if (clipped) {
+        list->PopClipRect();
+    }
+
+    // Button prompts in the grey footer below the screen: "(B)-Back  (A)-Select".
+    const float br = rh * 0.4f;
+    const float cy = (i1.y + o1.y) * 0.5f;  // centred in the grey footer bar below the screen
+    float x = i0.x + pad;
+    for (int i = 0; i < hintCount; ++i) {
+        round_button(list, ImVec2(x + br, cy), br, hints[i].color, hints[i].button);
+        x += br * 2.0f + font * 0.1f;
+        if (hints[i].action[0] != '\0') {
+            shadow_text(list, font, ImVec2(x, cy - font * 0.5f), kTextWhite, hints[i].action);
+            x += text_width(font, hints[i].action) + font * 0.8f;
+        } else {
+            x += font * 0.15f;
+        }
+    }
+}
+
+// The Updates row's text in the menu language. The fixed states are formatted here from the updater's state,
+// percentage and release tag; failures show the updater's own (English) message, except "No network".
+// State numbers follow updater_switch.cpp: idle, checking, up to date, available, downloading, ready, failed.
+void updater_status(char* out, size_t size) {
+    int percent = 0;
+    char tag[32] = "";
+    switch (sfaUpdaterState(&percent, tag, sizeof(tag))) {
+    case 0: std::snprintf(out, size, tr("v%s  A: check"), sfaUpdaterVersion()); break;
+    case 1: std::snprintf(out, size, "%s", tr("Checking...")); break;
+    case 2: std::snprintf(out, size, tr("Up to date (v%s)"), sfaUpdaterVersion()); break;
+    case 3: std::snprintf(out, size, tr("%s available  A: download"), tag); break;
+    case 4: std::snprintf(out, size, tr("Downloading %d%%"), percent); break;
+    case 5: std::snprintf(out, size, tr("%s downloaded  A: restart"), tag); break;
+    default: {
+        sfaUpdaterStatus(out, size);
+        const char* t = tr(out);  // tr returns out itself when untranslated: copy only a translation
+        if (t != out) {
+            std::snprintf(out, size, "%s", t);
+        }
+        break;
+    }
+    }
+}
 
 // Appends a control name to the "Switch held" line.
 void append_name(char* raw, size_t size, const char* name) {
@@ -844,42 +1219,45 @@ void append_name(char* raw, size_t size, const char* name) {
     std::strncat(raw, "  ", size - std::strlen(raw) - 1);
 }
 
-// Mapping page: one row per GameCube button with its Switch control, "PRESSED" while the game would see
-// it, "*" when it differs from the default; below, the sticks, triggers and raw Switch buttons held.
-// `scale` is the font scale (the main menu's, see draw_menu); the hint line is smaller, as on the menu.
-void draw_map_page(float scale) {
-    ImGui::SetWindowFontScale(scale);
-    ImGui::TextUnformatted("Button mapping  (GameCube = Switch)");
-    ImGui::Separator();
+// Button mapping page: one row per GameCube button with its Switch control (green while held, * when
+// changed), Reset and Back, then live stick / trigger values and the raw Switch buttons held.
+void draw_map_page() {
+    PanelRow rows[kMaxPanelRows];
+    int n = 0;
     if (sMapPad == nullptr) {
-        ImGui::TextColored(kGold, "No controller on port 1");
+        rows[n].info = true;
+        rows[n++].label = tr("No controller on port 1");
     }
     const u16 held = sLastStatus.err == PAD_ERR_NONE ? sLastStatus.button : 0;
     for (int i = 0; i < kRowCount; ++i) {
-        const bool sel = i == sMapSelected;
-        const ImVec4 color = sel ? kGold : kWhite;
+        PanelRow& r = rows[n++];
+        r.selected = i == sMapSelected;
         if (i >= PAD_BUTTON_COUNT) {
-            ImGui::TextColored(color, "%s %s", sel ? ">" : " ", i == kRowReset ? "Reset to defaults" : "Back");
+            r.label = tr(i == kRowReset ? "Reset To Defaults" : "Back");
+            r.gapBefore = i == kRowReset;
             continue;
         }
-        const char* value = i == sCapture ? "press a button... (- cancels)" : switch_name(sSources[i]);
-        ImGui::TextColored(color, "%s %-12s %-20s", sel ? ">" : " ", kGc[i].name, value);
-        ImGui::SameLine();
-        if ((held & kGc[i].bit) != 0) {
-            ImGui::TextColored(kGreen, "PRESSED");
+        r.label = tr(kGc[i].name);
+        if (i == sCapture) {
+            std::snprintf(r.value, sizeof(r.value), "%s", tr("Press a button... (- cancels)"));
         } else {
-            ImGui::TextUnformatted(sSources[i] != sDefaults[i] ? "*" : " ");
+            std::snprintf(r.value, sizeof(r.value), "%s%s", tr(switch_name(sSources[i])),
+                          sSources[i] != sDefaults[i] ? " *" : "");
+        }
+        if ((held & kGc[i].bit) != 0) {
+            r.valueColor = kPressedGreen;  // lights up while the GameCube button is pressed
         }
     }
-    ImGui::Separator();
+    static char stickLine[96];
+    static char heldLine[96];
     const PADStatus& s = sLastStatus;
-    ImGui::Text("Stick %4d %4d   C-Stick %4d %4d   L %3d   R %3d", s.stickX, s.stickY, s.substickX, s.substickY,
-                s.triggerLeft, s.triggerRight);
-    char raw[256] = "";
+    std::snprintf(stickLine, sizeof(stickLine), "Stick %4d %4d   C-Stick %4d %4d   L %3d   R %3d", s.stickX, s.stickY,
+                  s.substickX, s.substickY, s.triggerLeft, s.triggerRight);
+    char raw[64] = "";
     if (SDL_Gamepad* pad = sMapPad) {
         for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; ++b) {
             if (SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(b))) {
-                append_name(raw, sizeof(raw), switch_name(b));
+                append_name(raw, sizeof(raw), tr(switch_name(b)));
             }
         }
         for (int t : {kTrigger + SDL_GAMEPAD_AXIS_LEFT_TRIGGER, kTrigger + SDL_GAMEPAD_AXIS_RIGHT_TRIGGER}) {
@@ -888,146 +1266,131 @@ void draw_map_page(float scale) {
             }
         }
     }
-    ImGui::Text("Switch held: %s", raw);
-    ImGui::SetWindowFontScale(scale * 0.7f);
-    ImGui::TextDisabled("D-Pad: choose   A: remap   B: back   * = changed");
+    std::snprintf(heldLine, sizeof(heldLine), tr("Switch held: %s   (* = changed)"), raw);
+    rows[n].info = true;
+    rows[n].gapBefore = true;
+    rows[n++].label = stickLine;
+    rows[n].info = true;
+    rows[n++].label = heldLine;
+    const PanelHint hints[] = {{"B", kButtonRed, tr("-Back")}, {"A", kButtonGreen, tr("-Remap")}};
+    draw_panel(tr("BUTTON MAPPING"), nullptr, rows, n, hints, 2, 0.0f);
 }
 
-// The menu window, centred. The font is scaled so the longer Debug tab fits the screen height, and the
-// Game tab is padded to the same height so the window does not jump when switching tabs.
+// The options menu: the current tab's rows. With the Debug tab hidden (the default) the title is the game's
+// name and there are no tabs; testing builds show "SFA-NX" with the GAME / DEBUG tabs switched by L / R.
 void draw_menu() {
-    const ImVec2 display = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, display.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowBgAlpha(0.85f);
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs |
-                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
-    ImGui::Begin("SFA-NX menu", nullptr, flags);
-    // The tallest tab sets the font scale and height: Debug when shown, otherwise Game.
-    int debugCount = 0;
-    tab_items(sShowDebug ? 1 : 0, &debugCount);
-    ImGui::SetWindowFontScale(1.0f);
-    const float base = ImGui::GetFontSize();
-    const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    // The scale at which `n` lines fill 90% of the screen height.
-    auto fit = [&](float n) { return (display.y * 0.9f - n * spacing) / (n * base); };
-    const float scale = std::min(2.8f, fit(static_cast<float>(debugCount + 3)));
     if (sMapPage) {
-        // Same font and size as the menu, made smaller only when the page's rows would not fit the screen:
-        // title, maybe "No controller", one row per button plus Reset and Back, sticks, held, and the hint.
-        const float mapLines = static_cast<float>(kRowCount + (sMapPad == nullptr ? 5 : 4));
-        draw_map_page(std::min(scale, fit(mapLines)));
-        ImGui::End();
+        draw_map_page();
         return;
     }
-    ImGui::SetWindowFontScale(scale);
-    ImGui::Dummy(ImVec2(ImGui::CalcTextSize("> Render compression     Resume at warp 76  < restart >").x, 0.0f));
-    ImGui::TextUnformatted("SFA-NX");
-    // Tab strip only when there is a second tab to switch to.
-    if (sShowDebug) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("  L");
-        for (int t = 0; t < 2; ++t) {
-            ImGui::SameLine();
-            if (t == sTab) {
-                ImGui::TextColored(kGold, "[%s]", kTabNames[t]);
-            } else {
-                ImGui::TextDisabled(" %s ", kTabNames[t]);
-            }
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("R");
-    }
-    ImGui::Separator();
-    const char* labels[kItemCount] = {"Show FPS",      "Invert look",   "Profiler",
-                                      "Threads",       "Audio thread",         "Frame overlap", "Frame step",
+    // Title Case like the game's own menus.
+    const char* labels[kItemCount] = {"Show FPS",      "Invert Look",   "Profiler",
+                                      "Threads",       "Audio Thread",         "Frame Overlap", "Frame Step",
                                       "Pacing",        "Renderer",
-                                      "GPU clock",     "Render compression",   "Z-cull",        "Texture BC1",   "HD textures",
-                                      "Language",      "Button mapping", "Shader tour",         "Clear shader cache", "Updates",
-                                      "Close"};
+                                      "GPU Clock",     "Render Compression",   "Z-Cull",        "Texture BC1",   "HD Textures",
+                                      "Language",      "Button Mapping", "Shader Tour",         "Clear Shader Cache", "Updates",
+                                      "Restart",       "Close"};
     const bool values[kItemCount] = {sShowFps, sInvertLook, sfaProfEnabled() != 0, false,
                                      fhAIThreaded() != 0, aurora_frame_overlap(), sWholeSteps, false, false,
                                      false, false, sZcull,
-                                     sTexBc1, sHdTextures, false, false, false, false, false, false};
+                                     sTexBc1, sHdTextures, false, false, false, false, false, false, false};
+    PanelRow rows[kMaxPanelRows];
     int count = 0;
     const int* items = tab_items(sTab, &count);
+    // The Game tab follows the game's language; the Debug tab stays English.
+    auto T = [](const char* english) { return sTab == 0 ? tr(english) : english; };
     for (int row = 0; row < count; ++row) {
         const int i = items[row];
-        const bool sel = row == sSelected;
-        const ImVec4 color = sel ? kGold : kWhite;
+        PanelRow& r = rows[row];
+        r.label = T(labels[i]);
+        r.selected = row == sSelected;
+        // Restart / Close set apart at the bottom, like the game's "Exit To Desktop" (one gap above both).
+        r.gapBefore = i == kItemRestart || (i == kItemClose && (row == 0 || items[row - 1] != kItemRestart));
+        r.pinned = i == kItemRestart || i == kItemClose;  // fixed to the bottom, never scrolled
+        char* v = r.value;
+        const size_t vs = sizeof(r.value);
         if (i == kItemClose) {
-            ImGui::TextColored(color, "%s %s", sel ? ">" : " ", labels[i]);
+            // no value
+        } else if (i == kItemRestart) {
+            std::snprintf(v, vs, "%s", T("Applies the changes"));
         } else if (i == kItemMapping) {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i], sCustom ? "Custom" : "");
+            std::snprintf(v, vs, "%s", sCustom ? T("Custom") : "");
         } else if (i == kItemThreads) {
-            ImGui::TextColored(color, "%s %-21s < %s >", sel ? ">" : " ", labels[i],
-                               melee_nx_perf_affinity_name(melee_nx_perf_affinity()));
+            std::snprintf(v, vs, "< %s >", melee_nx_perf_affinity_name(melee_nx_perf_affinity()));
         } else if (i == kItemFrameStep) {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i],
-                               sWholeSteps ? "Whole frames" : "Measured");
+            std::snprintf(v, vs, "%s", sWholeSteps ? "Whole frames" : "Measured");
         } else if (i == kItemPacing) {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i],
-                               sVsyncPace ? "Display vsync" : "Timer");
+            std::snprintf(v, vs, "%s", sVsyncPace ? "Display vsync" : "Timer");
         } else if (i == kItemRenderer) {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i],
-                               aurora_direct_renderer() ? "Direct" : "Dawn");
+            std::snprintf(v, vs, "%s", aurora_direct_renderer() ? "Direct" : "Dawn");
         } else if (i == kItemTour) {
-            char status[48];
             if (sfaShaderTourActive()) {
-                sfaShaderTourStatus(status, sizeof(status));
+                sfaShaderTourStatus(v, vs);
             } else if (sTourRefused) {
-                std::snprintf(status, sizeof(status), "Load a save first");
+                std::snprintf(v, vs, "Load a save first");
             } else if (sfaShaderTourResumeWarp() > 0) {
-                std::snprintf(status, sizeof(status), "< Route %d > resume at warp %d", sfaShaderTourRoute(),
-                              sfaShaderTourResumeWarp());
+                std::snprintf(v, vs, "< Route %d > resume at warp %d", sfaShaderTourRoute(), sfaShaderTourResumeWarp());
             } else {
-                std::snprintf(status, sizeof(status), "< Route %d > start", sfaShaderTourRoute());
+                std::snprintf(v, vs, "< Route %d > start", sfaShaderTourRoute());
             }
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i], status);
         } else if (i == kItemGpuClock) {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i],
-                               sGpuBoost ? "460 MHz (handheld)" : "System");
+            std::snprintf(v, vs, "%s", sGpuBoost ? "460 MHz (handheld)" : "System");
         } else if (i == kItemCompression) {
             static const char* const kNames[3] = {"Off", "Colour", "Colour + depth"};
-            ImGui::TextColored(color, "%s %-21s < %s >%s", sel ? ">" : " ", labels[i],
-                               kNames[sCompression], sCompression != sBootCompression ? "  (restart)" : "");
+            std::snprintf(v, vs, "< %s >%s", kNames[sCompression], sCompression != sBootCompression ? "  (restart)" : "");
         } else if (i == kItemZcull || i == kItemTexBc1 || i == kItemHdTextures) {
             const bool pending = i == kItemZcull    ? sZcull != sBootZcull
                                  : i == kItemTexBc1 ? sTexBc1 != sBootTexBc1
                                                     : sHdTextures != sBootHdTextures;
-            ImGui::TextColored(color, "%s %-21s %s%s", sel ? ">" : " ", labels[i], values[i] ? "On" : "Off",
-                               pending ? "  (restart)" : "");
+            std::snprintf(v, vs, "%s%s", T(values[i] ? "On" : "Off"), pending ? T("  (restart)") : "");
         } else if (i == kItemLanguage) {
             // Only the PAL disc carries the other languages; other discs always run in their own.
             if (sfaDiscIsPal()) {
-                ImGui::TextColored(color, "%s %-21s < %s >%s", sel ? ">" : " ", labels[i], kLanguageNames[sLanguage],
-                                   sLanguage != sBootLanguage ? "  (restart)" : "");
+                std::snprintf(v, vs, "< %s >%s", kLanguageNames[sLanguage], sLanguage != sBootLanguage ? T("  (restart)") : "");
             } else {
-                ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i], "PAL disc only");
+                std::snprintf(v, vs, "%s", T("PAL disc only"));
             }
         } else if (i == kItemUpdate) {
-            char status[34];
-            sfaUpdaterStatus(status, sizeof(status));
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i], status);
+            updater_status(v, vs < 40 ? vs : 40);
         } else if (i == kItemShaderCache) {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i],
-                               sClearShaders ? "At next start" : "");
+            std::snprintf(v, vs, "%s", sClearShaders ? "At next start" : "");
         } else {
-            ImGui::TextColored(color, "%s %-21s %s", sel ? ">" : " ", labels[i], values[i] ? "On" : "Off");
+            std::snprintf(v, vs, "%s", T(values[i] ? "On" : "Off"));
         }
     }
-    for (int row = count; row < debugCount; ++row) {
-        ImGui::TextUnformatted(" ");
+    // Reserve the tallest tab's height (Debug when shown) plus the Restart row, so switching tabs or a
+    // Restart row appearing does not resize the panel.
+    const int tallest = 1 + (sShowDebug ? static_cast<int>(sizeof(kDebugItems) / sizeof(kDebugItems[0]))
+                                        : static_cast<int>(sizeof(kGameItems) / sizeof(kGameItems[0])));
+    char tabs[40] = "";
+    if (sShowDebug) {
+        std::snprintf(tabs, sizeof(tabs), "L  %s  %s  R", sTab == 0 ? "[GAME]" : " GAME ", sTab == 1 ? "[DEBUG]" : " DEBUG ");
     }
-    ImGui::Separator();
-    ImGui::SetWindowFontScale(scale * 0.7f);
-    // The L / R hint only applies when the Debug tab is shown.
-    ImGui::TextDisabled(sShowDebug ? "L / R: tab   D-Pad: choose   A: change   B / -: close"
-                                   : "D-Pad: choose   A: change   B / -: close");
-    ImGui::End();
+    const PanelHint hints[] = {{"B", kButtonRed, T("-Back")}, {"A", kButtonGreen, T("-Select")}};
+    draw_panel(sShowDebug ? "SFA-NX OPTIONS" : tr("STAR FOX ADVENTURES OPTIONS"), sShowDebug ? tabs : nullptr, rows, count,
+               hints, 2, static_cast<float>(tallest) + kGapRows);
 }
 
 } // namespace
+
+// Restart only (vi_shim.c): under hbloader the process lives on into the next NRO, so every service
+// session we leave open stays open. A leaked apm session per run made the second relaunch in a row
+// abort in libnx's applet init (2345-0031, its first step opens apm). Also puts the GPU clock back,
+// so the next run doesn't save the boosted configuration as the original.
+extern "C" void sfaSwitchMenuReleaseServices(void) {
+    if (sApmReady) {
+        if (sApmSaved) {
+            apmSetPerformanceConfiguration(ApmPerformanceMode_Normal, sApmOriginal);
+        }
+        apmExit();  // drops our reference; libnx's appletExit drops its own
+        sApmReady = false;
+        sApmSaved = false;
+    }
+    if (sClkrstReady) {
+        clkrstExit();
+        sClkrstReady = false;
+    }
+}
 
 // Called once per frame from VIWaitForRetrace (port/src/vi_shim.c), inside Aurora's ImGui frame. Loads the
 // settings on the first call, then handles input, the shader tour and the overlays.
