@@ -686,6 +686,7 @@ void end_frame(EndFrameCallback callback) {
     auto encoder = std::move(packet.encoder);
     const auto stats = packet.stats;
     auto afterSubmitCallbacks = std::move(packet.afterSubmitCallbacks);
+    recycle_command_lists(packet); // SFA-NX: keep the passes' command buffers (recording.cpp)
     packet = {};
     g_resources.stats.drawCallCount = stats.drawCallCount;
     g_resources.stats.mergedDrawCallCount = stats.mergedDrawCallCount;

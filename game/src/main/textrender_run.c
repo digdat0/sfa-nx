@@ -24,6 +24,7 @@
 #include "main/dll/dll_0015_save_settings.h"
 #include "track/intersect.h"
 #include "main/lightmap.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD aspect correction (per-command text anchors)
 #include "foxhollow_config.h"
 
 TextFont* gameTextFonts;
@@ -387,9 +388,13 @@ void gameTextRun(void)
     gGameTextCursorX = 0;
     gGameTextCursorY = 0;
 
+    // SFA-NX: each queued command is replayed under the HUD anchor it was queued with (widescreen HUD
+    // correction): record the anchor for any commands queued since the last change first
+    fhHudTextRecord(gGameTextCommandCount);
     i = gGameTextCommandCount;
     while (i-- != 0)
     {
+        fhHudPush(fhHudTextAnchor((int)(cmd - runtime->commands)));
         switch (cmd->opcode)
         {
         case 3:
@@ -496,6 +501,7 @@ void gameTextRun(void)
             }
             break;
         }
+        fhHudPop();
         cmd++;
     }
 
@@ -504,6 +510,7 @@ void gameTextRun(void)
         Sfx_StopFromObject(0, SFXTRIG_clock_loop);
     }
     gGameTextCommandCount = 0;
+    fhHudTextRecord(0); // SFA-NX: the queue is empty again: restart the per-command anchors
     gGameTextCommandStringCursor = runtime->commandStringBuffer;
 
     i = GAMETEXT_BOX_COUNT;

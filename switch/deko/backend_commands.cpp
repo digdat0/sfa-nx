@@ -13,6 +13,7 @@
 // SFA-NX, so kartpad_gpu_transition_guard is null and the "synchronous course transition" paths below
 // never run here. kartpad_opt is provided by host/deko_host_switch.cpp (perf.cfg values).
 extern "C" void kartpad_deko_log_failure_context();
+extern "C" int sfa_log_extra_on;  // switch/src/log_switch.cpp: the - menu's Extra logging
 // switch/src/transition_guard.cpp; weak, so builds without the game (renderer tests) link.
 extern "C" int kartpad_gpu_transition_guard(void) __attribute__((weak));
 extern "C" int kartpad_opt(const char *key, int fallback) __attribute__((weak));
@@ -85,12 +86,19 @@ void breadcrumb_context(Breadcrumb &record) {
   copy_label(record.pipeline, p ? p->label.c_str() : "<none>");
   copy_label(record.target, t ? t->label.c_str() : "<none>");
 }
+// SFA-NX: whether the GPU has written this operation's breadcrumb. ReportValue writes a 32-bit payload, so
+// only the low 32 bits are compared. The serial counts every operation, draws included (about 16k a
+// second), and so passes 2^32 after about 74 hours of running. The old check stopped the game there
+// ("GPU breadcrumb serial exhausted"). Wrapping is safe. Slot k only ever holds serials congruent to k
+// mod kGpuBreadcrumbs, and 2^32 is a multiple of that, so an older value matches the low bits only if it
+// was written a whole 2^32 serials (about 74 hours) earlier. Even then, the only effect is a skipped
+// history check.
+bool breadcrumb_reported(uint64_t serial) {
+  return uint32_t(breadcrumb_value(serial)) == uint32_t(serial);
+}
 void breadcrumb_begin() {
-  // ReportValue has a 32-bit payload. Stop rather than confuse generations on wrap.
-  if (gpuOperationSerial > UINT32_MAX) fatal("GPU breadcrumb serial exhausted");
   auto &record = gpuBreadcrumbs[gpuOperationSerial % kGpuBreadcrumbs];
-  if (record.operation.serial &&
-      (!record.recorded || breadcrumb_value(record.operation.serial) != record.operation.serial)) {
+  if (record.operation.serial && (!record.recorded || !breadcrumb_reported(record.operation.serial))) {
     log_gpu_breadcrumbs();
     fatal("GPU breadcrumb history full: refusing to overwrite unfinished operation %llu",
           (unsigned long long)record.operation.serial);
@@ -113,7 +121,8 @@ void breadcrumb_end() {
                       gpuReports.gpu + (gpuOperationSerial % kGpuBreadcrumbs) * 16);
   record.recorded = true;
   static uint64_t nextSampleFrame = 0;
-  if (record.frame >= nextSampleFrame) {
+  // A progress sample every 300 frames, with Extra logging only: a GPU hang dumps the breadcrumbs anyway.
+  if (record.frame >= nextSampleFrame && __atomic_load_n(&sfa_log_extra_on, __ATOMIC_RELAXED)) {
     const uint64_t sample = gpuOperationSerial > 2048 ? gpuOperationSerial - 2048 : 1;
     dklog("GPU progress sample: CPU=%llu sample_serial=%llu GPU_value=%llu",
           (unsigned long long)gpuOperationSerial, (unsigned long long)sample,
@@ -127,7 +136,7 @@ void log_gpu_breadcrumbs() {
   for (uint64_t serial = oldest; serial <= gpuOperationSerial; ++serial) {
     const auto &record = gpuBreadcrumbs[serial % kGpuBreadcrumbs];
     if (record.operation.serial != serial) continue;
-    if (record.recorded && breadcrumb_value(serial) == serial)
+    if (record.recorded && breadcrumb_reported(serial))
       lastReported = serial;
     else if (!firstPending)
       firstPending = serial;
@@ -422,28 +431,15 @@ bool bind_pipeline() {
     dkCmdBufBindDepthStencilState(R.cmd, &p->depth);
     dkCmdBufBindColorState(R.cmd, &p->color);
     dkCmdBufBindColorWriteState(R.cmd, &p->write);
-    auto blend = p->blend;
-    if ((p->write.masks & 15) == DkColorMask_A)
-      blend.dstColorBlendFactor = blend.dstAlphaBlendFactor;
-    dkCmdBufBindBlendStates(R.cmd, 0, &blend, 1);
+    // The vendored deko3d (switch/third_party/deko3d, patch 1) writes the alpha destination factor
+    // correctly, so the blend state binds as it is.
+    dkCmdBufBindBlendStates(R.cmd, 0, &p->blend, 1);
     dkCmdBufSetDepthBias(R.cmd, p->bias[0], p->bias[1], p->bias[2]);
     dkCmdBufBindVtxAttribState(R.cmd, p->attributes.empty() ? nullptr : p->attributes.data(),
                                p->attributes.size());
     dkCmdBufBindVtxBufferState(R.cmd, p->vertexStates.empty() ? nullptr : p->vertexStates.data(),
                                p->vertexStates.size());
     state.boundPipeline = p.get();
-    state.splitAlphaDirty = false;
-  } else if (state.splitAlphaDirty) {
-    // The second alpha-only draw changed only these three states. Preserve
-    // shaders and resource bindings instead of invalidating the full pipeline
-    // after every translucent UI/material draw.
-    dkCmdBufBindDepthStencilState(R.cmd, &p->depth);
-    dkCmdBufBindColorWriteState(R.cmd, &p->write);
-    auto blend = p->blend;
-    if ((p->write.masks & 15) == DkColorMask_A)
-      blend.dstColorBlendFactor = blend.dstAlphaBlendFactor;
-    dkCmdBufBindBlendStates(R.cmd, 0, &blend, 1);
-    state.splitAlphaDirty = false;
   }
   bind_stage(p->vs, DkStage_Vertex);
   bind_stage(p->fs, DkStage_Fragment);
@@ -452,8 +448,7 @@ bool bind_pipeline() {
 #ifdef COS_DK_DEBUG_LIB
 #include "gx_probe.inc"
 #endif
-// Issues one draw during replay: binds the pipeline (or skips the draw), then draws once, or twice when
-// the blend needs separate colour and alpha factors (see the comment inside).
+// Issues one draw during replay: binds the pipeline (or skips the draw), then draws once.
 void draw(bool indexed, uint32_t count, uint32_t instances, uint32_t first, int32_t base,
           uint32_t firstInstance) {
   GpuCheckpoint checkpoint(indexed ? "indexed draw" : "draw", count, instances, first);
@@ -467,6 +462,11 @@ void draw(bool indexed, uint32_t count, uint32_t instances, uint32_t first, int3
 #endif
   ++state.draws;
   auto p = state.pipeline;
+  // SFA-NX: per-draw GPU cost probe (gpu_timing.cpp): on a probe frame, a stamp before the draw (after its
+  // binds, so state changes are not counted) and one after it below
+  const bool probe = gpu_timing_draw_sampling();
+  if (probe)
+    gpu_timing_draw_begin();
   auto issue = [&] {
     if (indexed) {
       if (!state.index)
@@ -477,28 +477,30 @@ void draw(bool indexed, uint32_t count, uint32_t instances, uint32_t first, int3
     } else
       dkCmdBufDraw(R.cmd, p->topology, count, instances, first, firstInstance);
   };
-  // deko3d 0.5.0 uses dstColorBlendFactor for destination alpha. Preserve both
-  // equations by writing RGB first and alpha second when their factors differ.
-  if ((p->color.blendEnableMask & 1) &&
-      p->blend.dstColorBlendFactor != p->blend.dstAlphaBlendFactor && (p->write.masks & 15) == 15) {
-    auto cw = p->write;
-    dkColorWriteStateSetMask(&cw, 0, DkColorMask_RGB);
-    dkCmdBufBindColorWriteState(R.cmd, &cw);
-    issue();
-    dkColorWriteStateSetMask(&cw, 0, DkColorMask_A);
-    dkCmdBufBindColorWriteState(R.cmd, &cw);
-    auto b = p->blend;
-    b.dstColorBlendFactor = b.dstAlphaBlendFactor;
-    dkCmdBufBindBlendStates(R.cmd, 0, &b, 1);
-    auto d = p->depth;
-    if (d.depthWriteEnable)
-      d.depthCompareOp = DkCompareOp_Equal;
-    d.depthWriteEnable = false;
-    dkCmdBufBindDepthStencilState(R.cmd, &d);
-    issue();
-    state.splitAlphaDirty = true;
-  } else {
-    issue();
+  issue();
+  // SFA-NX: the probe's second stamp, with what identifies the draw: shaders, size, blend and depth state,
+  // viewport, and the first texture the fragment stage samples
+  if (probe) {
+    GpuDrawInfo info;
+    info.vsHash = p->vs.shader ? p->vs.shader->glslHash : 0;
+    info.fsHash = p->fs.shader ? p->fs.shader->glslHash : 0;
+    info.count = count;
+    info.instances = instances;
+    info.indexed = indexed;
+    info.blend = (p->color.blendEnableMask & 1) != 0;
+    info.depthTest = p->depth.depthTestEnable;
+    info.depthWrite = p->depth.depthWriteEnable;
+    info.viewportW = uint32_t(state.viewport.width);
+    info.viewportH = uint32_t(state.viewport.height);
+    for (auto &slot : p->fs.slots) {
+      if (slot.kind != SlotBinding::Kind::Sampler || slot.group >= state.groups.size())
+        continue;
+      auto *b = binding(state.groups[slot.group], slot.binding);
+      auto *v = b ? find_view(b->view.Get()) : nullptr;
+      info.tex = v ? v->tex : nullptr;
+      break;
+    }
+    gpu_timing_draw_end(info);
   }
 #ifdef COS_DK_DEBUG_LIB
   probe_after_draw();

@@ -29,6 +29,7 @@
 #include "main/rcp_dolphin.h"
 #include "dolphin/gx/GXEnum.h"
 #include "main/lightmap.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD aspect correction (anchors for the HUD panels)
 #include "PowerPC_EABI_Support/Msl/MSL_C/MSL_Common/printf.h"
 #include "dolphin/gx/GXBump.h"
 #include "dolphin/gx/GXGeometry.h"
@@ -2029,6 +2030,9 @@ void hudDrawStatusBarsAndCounters(int unused1, int unused2, int unused3)
         }
     }
     GXSetScissor(0, 0, 0x280, 0x1e0);
+    // SFA-NX: the counters (scarabs, spores, food...) are bottom-right: pinned to the right edge
+    fhHudPop();
+    fhHudPush(FH_HUD_RIGHT);
     if (gTrickyHudShowNearestInfo != 0)
     {
         int c2 = 0, c1 = 0, c0 = 0;
@@ -3802,7 +3806,8 @@ void hudDrawCMenu(int p1, int p2, int p3)
     Camera_SetCurrentViewRotation(0x8000, 0, 0);
     Camera_UpdateViewMatrices();
     Camera_RebuildProjectionMatrix();
-    GXSetViewport(sx - lbl_803E1F34, sy - 240.0f, (f32)(u32)gRenderModeObj->fbWidth,
+    // SFA-NX: the ring's centre moves with the HUD around it (fhHudMapX, widescreen HUD correction)
+    GXSetViewport(fhHudMapX(sx) - lbl_803E1F34, sy - 240.0f, (f32)(u32)gRenderModeObj->fbWidth,
                   (f32)(u32)gRenderModeObj->xfbHeight, 0.0f, 1.0f);
     zero = 0;
     i = zero;
@@ -4010,7 +4015,10 @@ void drawTrickyHudOverlay(int obj, int unused1, int unused2)
         gTrickyHudItemMask = 0;
         gTrickyHudActionMask = 0;
     }
+    // SFA-NX: the viewfinder overlay is full-screen and lines up with its aperture mask: original mapping
+    fhHudPush(FH_HUD_NONE);
     drawViewFinderHud();
+    fhHudPop();
     if ((*gCameraInterface)->getMode() != CAMERA_MODE_VIEWFINDER_RESOURCE_ID &&
         (player->objectFlags & CMENU_OBJFLAG_PARENT_SLACK) == 0 && pauseMenuState == 0 &&
         tricky != NULL && getHudHiddenFrameCount() == 0)
@@ -4038,8 +4046,11 @@ void drawTrickyHudOverlay(int obj, int unused1, int unused2)
         gTrickyHudCachedIconIndex = iconIndex;
         if (gTrickyHudCachedIconTexture != 0)
         {
+            // SFA-NX: Tricky's command icon sits under the top-left panel
+            fhHudPush(FH_HUD_LEFT);
             drawTexture((void*)hudTextures[0x1d], 140.0f, 90.0f, 0xff, 0x100);
             drawTexture(gTrickyHudCachedIconTexture, 140.0f, 94.0f, 0xff, 0x80);
+            fhHudPop();
         }
     }
 }
@@ -4170,7 +4181,9 @@ void headDisplayDraw(void)
             viewportY = 0x186;
             break;
         }
-        GXSetScissor(0x1ea, width, 0x78, height);
+        // SFA-NX: the comms panel is on the right; its scissor, depth clear, head viewport and frame move together
+        fhHudPush(FH_HUD_RIGHT);
+        fhHudScissor(0x1ea, width, 0x78, height);
         drawRect(490.0f, (f32)(int)width, 0x78, height);
         gGameUiSavedFovY = Camera_GetFovY();
         Camera_SetFovY(43.0f);
@@ -4182,7 +4195,8 @@ void headDisplayDraw(void)
         Camera_SetCurrentViewRotation(0x8000, 0, 0);
         Camera_UpdateViewMatrices();
         Camera_RebuildProjectionMatrix();
-        GXSetViewport(230.0f, viewportY - 240.0f, (f32)(u32)gRenderModeObj->fbWidth,
+        // SFA-NX: viewport centre 230 + 320 = 550, the panel's centre, moved like the panel (fhHudMapX)
+        GXSetViewport(fhHudMapX(550.0f) - 320.0f, viewportY - 240.0f, (f32)(u32)gRenderModeObj->fbWidth,
                       (f32)(u32)gRenderModeObj->xfbHeight, 0.0f, 1.0f);
         if (gHeadDisplayModelObjs[panelType] != NULL)
         {
@@ -4235,6 +4249,7 @@ void headDisplayDraw(void)
         drawScaledTexture(hudTextures[10], 610.0f, (s16)width + (s16)(int)height, panelAlpha, 0x100, 5, 5, 3);
         drawScaledTexture(hudTextures[10], 610.0f, (s16)width - 5, panelAlpha, 0x100, 5, 5, 1);
         drawScaledTexture(hudTextures[10], 485.0f, (s16)width + (s16)(int)height, panelAlpha, 0x100, 5, 5, 2);
+        fhHudPop();
     }
 }
 
@@ -5670,7 +5685,8 @@ void gameUiBeginOverlayView(f32 fov, f32 x, f32 y)
     Camera_SetCurrentViewRotation(0x8000, 0, 0);
     Camera_UpdateViewMatrices();
     Camera_RebuildProjectionMatrix();
-    GXSetViewport(x - lbl_803E1F34, y - 240.0f, (f32)gRenderModeObj->fbWidth,
+    // SFA-NX: the overlay's centre moves with the HUD around it (fhHudMapX, widescreen HUD correction)
+    GXSetViewport(fhHudMapX(x) - lbl_803E1F34, y - 240.0f, (f32)gRenderModeObj->fbWidth,
                   gRenderModeObj->xfbHeight, 0.0f, 1.0f);
 }
 
@@ -8283,14 +8299,23 @@ void GameUI_hudDraw(int a, int b, int c)
                 scale = 0.5f;
                 x = sx - scale * (f32)(u32) tex->width;
                 y = sy - scale * (f32)(u32) tex->height;
+                // SFA-NX: the reticle sits on a projected 3D position, so it keeps its own centre (only its width is corrected)
+                fhHudPush(FH_HUD_OWN);
                 drawTexture(tex, x, y, 0x96, 0x100);
+                fhHudPop();
             }
+            // SFA-NX: health, magic and Tricky's energy are the top-left panel (the counters switch to the right inside)
+            fhHudPush(FH_HUD_LEFT);
             hudDrawStatusBarsAndCounters(a, b, c);
+            fhHudPop();
         }
         GXSetScissor(0, 0, 0x280, 0x1e0);
         if (player != 0)
         {
+            // SFA-NX: A/B/Y buttons, their labels and the C-menu ring are the top-right panel
+            fhHudPush(FH_HUD_RIGHT);
             hudDrawButtons(a, b, c);
+            fhHudPop();
             box = gameTextGetBox(0x7c);
             if (curGameText != 0xffff && gNpcDialogueTextAlpha != 0)
             {

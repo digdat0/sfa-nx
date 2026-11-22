@@ -20,6 +20,14 @@ void melee_nx_log_write_critical(const char* bytes, size_t size);
 void melee_nx_log_flush(void);
 // Joins the writer; used by host regression tests and orderly teardown.
 void melee_nx_log_shutdown(void);
+// The - menu's Extra logging setting (switch_menu.ini extra_logging, off by default). When off the log keeps
+// what a bug report needs (boot and load lines, the 30 s memory/GPU statistics, errors, GPU hang dumps);
+// when on it adds the leak finder, the GPU progress samples, the HUD statistics and 2 s LOGIO lines.
+// A plain int so the allocator (malloc_switch.c) can read it with one load; use the functions to change it.
+extern int sfa_log_extra_on;
+static inline int sfa_log_extra(void) { return __atomic_load_n(&sfa_log_extra_on, __ATOMIC_RELAXED); }
+// Sets the flag and logs the change.
+void sfa_log_set_extra(int on);
 #ifdef __cplusplus
 }
 #endif

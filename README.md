@@ -41,12 +41,20 @@ sdmc:/switch/SFA-NX/
 
 Press **−** in game to open the options menu.
 
-- **Game**: Show FPS, Invert Look, HD Textures, Language, Button Mapping, Updates.
+- **Game**: Show FPS, Invert Look, HD Textures, Docked Resolution, Widescreen HUD, Language, Button Mapping,
+  Updates, Extra Logging.
 - **Debug**: performance and renderer settings for testing. Hidden unless `config/switch_menu.ini` contains
   the line `debug_menu=1`.
 
 Default controls follow the GameCube layout: ZL / ZR are the L / R triggers and R is Z. You can change them
 under **Button Mapping**.
+
+## Reporting a problem
+
+SFA-NX writes `logs/log.txt`, which holds the last 10 times you played. If the game crashes or misbehaves,
+turn on **−** → **Extra Logging** (it adds more detail and costs a little speed), play until the problem
+happens again, then zip the whole `sdmc:/switch/SFA-NX/logs` folder and attach it to your report. Turn Extra
+Logging off again afterwards.
 
 ## Updates
 

@@ -21,6 +21,8 @@ struct RecordedFrame {
 void begin_recording(FramePacket& packet, size_t frameSlot);
 RecordedFrame end_recording();
 void shutdown_recording();
+// SFA-NX: hands a finished frame's command list buffers back for reuse (render worker, end of frame)
+void recycle_command_lists(FramePacket& packet);
 void increment_merged_draw_count() noexcept;
 
 namespace testing {

@@ -62,6 +62,7 @@
 #include "main/gametext_show.h"
 #include "main/dll/dll_02C0_front.h"
 #include "main/dll/front_game_text_box.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD aspect correction
 
 s8 gTitleScreenPrevMenuSelection = -1;
 s8 gTitleScreenPrevMenuActive = -1;
@@ -479,12 +480,15 @@ void nameEntryTextDrawFunc(int x0, int y0, int x1, int y1, f32 u0, f32 v0, f32 u
 {
     GXLoadPosMtxImm((MtxPtr)gTitleScreenMtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD correction for the name-entry text and its scissor (port/src/fh_hud_aspect.c).
+    // The quad's screen x: its quarter-pixel x (scrolled, + 0x208) / 4 plus the matrix's translation.
+    fhHudSetProjection(0.25f * (f32)(s16)(x0 - *(u32*)&gNameEntryScrollX * 4 + 0x208) + ((MtxPtr)gTitleScreenMtx)[0][3],
+                       0.25f * (f32)(s16)(x1 - *(u32*)&gNameEntryScrollX * 4 + 0x208) + ((MtxPtr)gTitleScreenMtx)[0][3]);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetScissor((int)((u32) ((MtxPtr)gTitleScreenMtx)[0][3] + 0x39),
+    fhHudScissor((int)((u32) ((MtxPtr)gTitleScreenMtx)[0][3] + 0x39),
                  (int)((u32) ((MtxPtr)gTitleScreenMtx)[1][3] + 0x4e), 0x104, 0x16);
     GXBegin(GX_QUADS, GX_VTXFMT1, 4);
     GXPosition3s16((s16)(x0 - *(u32*)&gNameEntryScrollX * 4 + 0x208), y0, -0x20);
@@ -507,7 +511,10 @@ void titleScreenTextDrawFunc(int x0, int y0, int x1, int y1, f32 u0, f32 v0, f32
 {
     GXLoadPosMtxImm((MtxPtr)gTitleScreenMtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD correction for the title menus' text (port/src/fh_hud_aspect.c). The quad's screen
+    // x: its quarter-pixel x / 4 plus the menu's translation (titleScreenPositionElements slides it in from
+    // x = -380, off screen, where it must stay hidden).
+    fhHudSetProjection(0.25f * (f32)x0 + ((MtxPtr)gTitleScreenMtx)[0][3], 0.25f * (f32)x1 + ((MtxPtr)gTitleScreenMtx)[0][3]);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);

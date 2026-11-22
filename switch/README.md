@@ -52,7 +52,8 @@ sdmc:/switch/SFA-NX/<your disc>.iso     # your own GSAE01 / GSAJ01 / GSAP01 imag
 
 Start it with title takeover (hold R while launching a game, then open the Homebrew Menu). The shader
 and pipeline seeds (`switch/seed/`) are packed into the NRO's RomFS. Logs are in `logs/` (`boot.txt`,
-`stdout-NNN.log`); saves in `user/`, settings in `config/`, shader caches in `cache/`. Not supported on
+`log.txt` with the last 10 runs; `extra_logging=1` in `config/switch_menu.ini` or the menu's Extra Logging adds
+the leak finder and GPU samples); saves in `user/`, settings in `config/`, shader caches in `cache/`. Not supported on
 Switch: native mod DLLs, the desktop crash handler, Wii and WIA images. GameCube RVZ (zstd) is
 decoded on the fly by `src/nod/rvz.c`.
 

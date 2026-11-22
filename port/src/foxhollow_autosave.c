@@ -86,6 +86,10 @@ static int write_snapshot(const char* path, const u8* file, size_t size) {
   return 1;
 }
 
+#ifdef __SWITCH__
+extern int sfa_log_extra_on; /* switch/src/log_switch.cpp: the - menu's Extra logging */
+#endif
+
 void fhAutosaveUpdate(void) {
   const char* path = fhConfigAutosavePath();
   u8 file[FH_AUTOSAVE_HEADER_SIZE + FH_AUTOSAVE_SLOT_SIZE];
@@ -133,6 +137,12 @@ void fhAutosaveUpdate(void) {
       fprintf(stderr, "[foxhollow] autosave snapshot could not be written to %s\n", path);
     }
   }
+#ifdef __SWITCH__
+  else if (__atomic_load_n(&sfa_log_extra_on, __ATOMIC_RELAXED)) {
+    /* With the Switch - menu's Extra logging: every snapshot written, to place a save in a bug report. */
+    fprintf(stderr, "[foxhollow] autosave snapshot written (slot %d)\n", gSaveGameCurrentSlot);
+  }
+#endif
 }
 
 void fhAutosaveShutdown(void) {

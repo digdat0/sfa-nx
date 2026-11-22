@@ -6,7 +6,8 @@
 //   <any>.iso/.gcm/.rvz   the user's own Star Fox Adventures disc image (GSAE01/GSAJ01/GSAP01)
 //   logs/                 everything needed for debugging, in one folder:
 //     boot.txt            boot markers, committed one by one (survives a crash before logs open)
-//     stdout-NNN.log      runtime log, one per run, numbered; kept until deleted
+//     log.txt             runtime log of the last 10 runs, each starting with a "===== SFA-NX run" line
+//     profile-NNN.txt     profiler reports (Debug tab), the newest 10 kept
 //     deko-fail-*         shaders the GPU backend could not compile
 //     crash_reports/      copies of the newest Atmosphere crash reports (copied at the next start)
 //   config/               port settings: switch_menu.ini (- menu), perf.cfg (tuning knobs), uber.tripped
@@ -26,11 +27,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 extern "C" int aurora_main(int argc, char** argv); // src/main.c (aurora/main.h renames its main)
@@ -209,30 +212,167 @@ int early_cfg(const char* want, int fallback) {
     return value;
 }
 
-// Opens the next free logs/stdout-NNN.log and sends stdout/stderr to it. Each run gets a new number so
-// earlier logs are never overwritten; O_EXCL makes the open fail rather than reuse an existing file.
-bool redirect_stdio() {
-    std::fflush(stdout);
-    std::fflush(stderr);
-    int last = 0;
+// ---- logs/log.txt: one file holding the last kKeepRuns runs ----------------------------------------------
+// Each run appends to the same file, starting with a kRunMarker line. At start, before this run's header,
+// the oldest runs are cut so at most kKeepRuns - 1 earlier runs stay, and the file stays under kMaxLogBytes
+// (a profiler session can write several MiB; normal play writes far less). Cutting copies the kept tail to
+// log.tmp and renames it over log.txt, so a crash mid-cut leaves either the old file or the new one.
+constexpr const char* kRunLog = LOG_DIR "/log.txt";
+constexpr const char* kRunLogTmp = LOG_DIR "/log.tmp";
+constexpr const char kRunMarker[] = "===== SFA-NX run ";
+constexpr int kKeepRuns = 10;
+constexpr long kMaxLogBytes = 16L << 20;
+
+// Settles a cut interrupted by a crash: log.tmp alone is the finished copy (log.txt was already removed);
+// next to log.txt it is an unfinished one.
+void recover_run_log() {
+    struct stat st;
+    if (stat(kRunLogTmp, &st) != 0) {
+        return;
+    }
+    if (stat(kRunLog, &st) != 0) {
+        rename(kRunLogTmp, kRunLog);
+    } else {
+        unlink(kRunLogTmp);
+    }
+}
+
+// Drops the oldest runs from log.txt (see above). Any failure leaves the file as it was.
+void trim_run_log() {
+    recover_run_log();
+    FILE* in = std::fopen(kRunLog, "rb");
+    if (in == nullptr) {
+        return;
+    }
+    static char inBuf[64 * 1024];
+    std::setvbuf(in, inBuf, _IOFBF, sizeof(inBuf));
+    // Offsets of every run header; a marker counts only at the start of a line.
+    std::vector<long> runs;
+    char line[1024];
+    bool lineStart = true;
+    long at = 0;
+    while (std::fgets(line, sizeof(line), in) != nullptr) {
+        const size_t n = std::strlen(line);
+        if (lineStart && std::strncmp(line, kRunMarker, sizeof(kRunMarker) - 1) == 0) {
+            runs.push_back(at);
+        }
+        at += long(n);
+        lineStart = n > 0 && line[n - 1] == '\n';
+    }
+    const long total = at;
+    // Keep the newest kKeepRuns - 1 runs (this run is the next one), then drop whole runs while over the
+    // size cap. If the newest run alone is too big, keep its last kMaxLogBytes from a line start.
+    size_t first = runs.size() >= size_t(kKeepRuns) ? runs.size() - (kKeepRuns - 1) : 0;
+    long keep = runs.empty() ? 0 : runs[first];
+    while (total - keep > kMaxLogBytes && first + 1 < runs.size()) {
+        keep = runs[++first];
+    }
+    bool partial = false;
+    if (total - keep > kMaxLogBytes) {
+        keep = total - kMaxLogBytes;
+        partial = true;
+    }
+    if (keep <= 0) {
+        std::fclose(in);
+        return;
+    }
+    FILE* out = std::fopen(kRunLogTmp, "wb");
+    bool ok = out != nullptr && std::fseek(in, keep, SEEK_SET) == 0;
+    if (ok && partial) {
+        // resume at the next line start and say that the run's beginning was cut
+        int c;
+        while ((c = std::fgetc(in)) != EOF && c != '\n') {
+        }
+        std::fputs("[log] the beginning of this run was cut to keep log.txt under 16 MiB\n", out);
+    }
+    static char copyBuf[64 * 1024];
+    size_t n;
+    while (ok && (n = std::fread(copyBuf, 1, sizeof(copyBuf), in)) > 0) {
+        ok = std::fwrite(copyBuf, 1, n, out) == n;
+    }
+    std::fclose(in);
+    if (out != nullptr) {
+        ok = std::fclose(out) == 0 && ok;
+    }
+    // FAT cannot rename over an existing file: remove log.txt first (recover_run_log covers a crash here).
+    if (ok && unlink(kRunLog) == 0) {
+        rename(kRunLogTmp, kRunLog);
+    } else {
+        unlink(kRunLogTmp);
+    }
+}
+
+// Older builds wrote one logs/stdout-NNN.log per run; log.txt replaces them, so they are removed.
+void remove_numbered_logs() {
+    std::vector<std::string> old;
     if (DIR* d = opendir(LOG_DIR)) {
         while (dirent* e = readdir(d)) {
             int n = 0;
             char tail[8] = {};
             if (std::sscanf(e->d_name, "stdout-%d.%7s", &n, tail) == 2 && std::strcmp(tail, "log") == 0) {
-                last = std::max(last, n);
+                old.emplace_back(std::string(LOG_DIR "/") + e->d_name);
             }
         }
         closedir(d);
     }
-    int fd = -1;
-    char path[96];
-    for (int n = last + 1; fd < 0 && n < last + 100; ++n) {
-        std::snprintf(path, sizeof(path), LOG_DIR "/stdout-%03d.log", n);
-        fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    for (const std::string& path : old) {
+        unlink(path.c_str());
     }
+}
+
+// Keeps only the newest kKeepRuns profiler reports (logs/profile-NNN.txt, prof_switch.cpp numbers them
+// upwards), so a tester's card does not fill with them.
+void prune_profiles() {
+    std::vector<std::pair<int, std::string>> files;
+    if (DIR* d = opendir(LOG_DIR)) {
+        while (dirent* e = readdir(d)) {
+            int n = 0;
+            char tail[8] = {};
+            if (std::sscanf(e->d_name, "profile-%d.%7s", &n, tail) == 2 && std::strcmp(tail, "txt") == 0) {
+                files.emplace_back(n, std::string(LOG_DIR "/") + e->d_name);
+            }
+        }
+        closedir(d);
+    }
+    std::sort(files.begin(), files.end());
+    for (size_t i = 0; i + kKeepRuns < files.size(); ++i) {
+        unlink(files[i].second.c_str());
+    }
+}
+
+// Trims logs/log.txt, appends this run's header to it and sends stdout/stderr there.
+bool redirect_stdio() {
+    std::fflush(stdout);
+    std::fflush(stderr);
+    remove_numbered_logs();
+    prune_profiles();
+    trim_run_log();
+    const int fd = open(kRunLog, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
         return false;
+    }
+    lseek(fd, 0, SEEK_END);  // O_APPEND already writes at the end; this makes sure the first write is too
+    {
+        // The header starts on a new line even when the previous run died mid-line.
+        // The console's local time (newlib's localtime has no time zone here and would give UTC).
+        char header[160];
+        char when[40];
+        const time_t now = time(nullptr);
+        TimeCalendarTime local{};
+        TimeCalendarAdditionalInfo zone{};
+        if (R_SUCCEEDED(timeToCalendarTimeWithMyRule(u64(now), &local, &zone))) {
+            std::snprintf(when, sizeof(when), "%04d-%02d-%02d %02d:%02d:%02d", local.year, local.month,
+                          local.day, local.hour, local.minute, local.second);
+        } else {
+            struct tm utc{};
+            gmtime_r(&now, &utc);
+            std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S UTC", &utc);
+        }
+        const int n = std::snprintf(header, sizeof(header), "\n%s%s  build %s =====\n", kRunMarker, when, kBuildStamp);
+        if (n > 0 && write(fd, header, size_t(n)) != n) {
+            close(fd);
+            return false;
+        }
     }
     // Unbuffered: lines reach the writer (or the card) immediately, so nothing is lost if the game crashes.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -338,6 +478,9 @@ extern "C" int main(int argc, char** argv) {
     unlink(SFA_DIR "/boot.txt");
     unlink(SFA_DIR "/stdout.log");
     unlink(SFA_DIR "/stdout.prev.log");
+    // and in logs/ from builds before the numbered logs (logs/log.txt replaces both)
+    unlink(LOG_DIR "/stdout.log");
+    unlink(LOG_DIR "/stdout.prev.log");
     // All port settings live in config/; move files from older builds (rename keeps an existing new copy).
     mkdir(CONFIG_DIR, 0777);
     for (const char* name : {"switch_menu.ini", "perf.cfg", "uber.tripped"}) {
@@ -384,6 +527,12 @@ extern "C" int main(int argc, char** argv) {
         return fail_screen("  Could not open a log file in " LOG_DIR " for writing.");
     }
     melee_boot_trace("03 logs  ok");
+    // The - menu's Extra logging (log_switch.h), from switch_menu.ini before anything that checks it runs.
+    // sfa_log_set_extra logs only a change (here: "on"), so the default is stated here.
+    sfa_log_set_extra(sfaSwitchMenuIniValue("extra_logging", 0));
+    if (!sfa_log_extra()) {
+        std::printf("[sfa-nx] extra logging off\n");
+    }
     // Foxhollow reads these to find its folders; setenv's last argument 0 keeps a value set elsewhere.
     copy_crash_reports();
 
@@ -415,6 +564,16 @@ extern "C" int main(int argc, char** argv) {
         if (lang >= 0 && lang < 6 && kCodes[lang] != nullptr) {
             setenv("FOXHOLLOW_LANGUAGE", kCodes[lang], 0);
             melee_boot_trace("   language %s", kCodes[lang]);
+        }
+    }
+    // Test runs (Ryujinx) only: switch_menu.ini screen_style=1 starts in the game's 16:9 mode, 2 in 4:3, without
+    // its Options menu (there is no one to press buttons). Read, never written; forcing it hides the game's own
+    // Widescreen option (port/src/foxhollow_config.c FOXHOLLOW_SCREEN_STYLE).
+    {
+        const int style = sfaSwitchMenuIniValue("screen_style", 0);
+        if (style == 1 || style == 2) {
+            setenv("FOXHOLLOW_SCREEN_STYLE", style == 1 ? "wide" : "narrow", 0);
+            melee_boot_trace("   screen style %s (test)", style == 1 ? "wide" : "narrow");
         }
     }
     // 1024-frame SDL audio buffers leave more slack before the sound underruns when a frame runs long.

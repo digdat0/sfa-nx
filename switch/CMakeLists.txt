@@ -16,7 +16,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 get_filename_component(_repo "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(FH_ROOT "${_repo}")
 
-option(SFA_NX_MALLOC_WRAP "Route malloc to newlib's _malloc_r (switch/src/malloc_switch.c)" ON)
+# The heap allocator is dlmalloc 2.8.6 (switch/src/malloc_switch.c defines newlib's malloc entry points,
+# so newlib's own malloc objects are never linked; build.sh checks that).
 
 # Dawn, SDL3, Aurora (staged copy) and the deko3d renderer.
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Graphics.cmake")
@@ -124,9 +125,6 @@ target_link_libraries(sfa-nx PRIVATE
 target_compile_definitions(sfa-nx PRIVATE SFA_NX_VERSION="${PROJECT_VERSION}" CURL_STATICLIB)
 add_dependencies(sfa-nx game)
 
-if(SFA_NX_MALLOC_WRAP)
-  target_link_options(sfa-nx PRIVATE "LINKER:--wrap=malloc")
-endif()
 # Threads get 8 MB stacks and exit tears down cleanly (switch/src/clang_tls_switch.c).
 target_link_options(sfa-nx PRIVATE
   "LINKER:--wrap=pthread_create" "LINKER:--wrap=pthread_join" "LINKER:--wrap=pthread_detach"

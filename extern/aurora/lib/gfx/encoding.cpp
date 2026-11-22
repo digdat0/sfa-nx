@@ -505,7 +505,7 @@ bool needs_staging_copy(const FramePacket& frame, const FrameOp& op) {
     return true;
   }
   if constexpr (UseTextureBuffer) {
-    return op.textureUploads.size() > frame.copied.textureUploadCount;
+    return op.highWater.textureUploadCount > frame.copied.textureUploadCount;
   }
   return false;
 }
@@ -525,8 +525,13 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
                             res.storageBuffer);
 
   if constexpr (UseTextureBuffer) {
-    for (size_t i = frame.copied.textureUploadCount; i < op.textureUploads.size(); ++i) {
-      const auto& item = *op.textureUploads[i];
+    // SFA-NX: the op lists only its new uploads (FrameOp::newTextureUploads); index = base + j
+    const size_t base = op.highWater.textureUploadCount - op.newTextureUploads.size();
+    for (size_t j = 0; j < op.newTextureUploads.size(); ++j) {
+      if (base + j < frame.copied.textureUploadCount) {
+        continue; // already copied
+      }
+      const auto& item = *op.newTextureUploads[j];
       const wgpu::TexelCopyBufferInfo buf{
           .layout =
               wgpu::TexelCopyBufferLayout{
@@ -539,7 +544,7 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
       cmd.CopyBufferToTexture(&buf, &item.tex, &item.size);
     }
     frame.copied.textureUpload = highWater.textureUpload;
-    frame.copied.textureUploadCount = op.textureUploads.size();
+    frame.copied.textureUploadCount = op.highWater.textureUploadCount;
   }
 }
 } // namespace

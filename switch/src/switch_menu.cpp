@@ -1,6 +1,7 @@
 // SFA-NX's - (minus) menu, drawn with Aurora's Dear ImGui draw lists in the style of the game's own menus
 // (see "menu look" below). Two tabs, switched with L / R:
-//   Game:  Show FPS, Invert Look, HD Textures, Language, Button Mapping, Updates.
+//   Game:  Show FPS, Invert Look, HD Textures, Docked Resolution, Widescreen HUD, Language, Button Mapping,
+//          Updates.
 //   Debug: (only with debug_menu=1 in switch_menu.ini, off by default) the profiler, thread placement (perf_switch.cpp policies, switched live), the audio thread
 //          (port/src/ai_shim.c), frame overlap / frame step / pacing, the renderer, GPU clock and GPU
 //          options, the shader tour and clearing the shader cache.
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <switch.h>
+#include "log_switch.h"  // the Extra Logging row (sfa_log_extra / sfa_log_set_extra)
 
 extern "C" void sfaProfSetEnabled(int on);     // prof_switch.cpp
 extern "C" int sfaProfEnabled(void);
@@ -57,6 +59,9 @@ constexpr const char* kSettingsPath = "sdmc:/switch/SFA-NX/config/switch_menu.in
 // Current settings. The sBoot* copies hold the values the running session started with, so the menu can
 // show "(restart)" for settings that only apply at the next start.
 bool sShowFps = false;
+// Profiler shown small: one "PROF <samples>" tag next to the FPS counter instead of the big phase box (that
+// box covers the health bar). The profiler itself runs the same either way (GPU timing, profile dumps).
+bool sProfCompact = false;
 bool sInvertLook = false;
 bool sLoaded;
 bool sGpuBoost = false;
@@ -90,10 +95,15 @@ constexpr Translation kTranslations[] = {
     {"Show FPS", {"Afficher les FPS", "FPS anzeigen", "Mostra FPS", "Mostrar FPS"}},
     {"Invert Look", {"Inverser la caméra", "Kamera invertieren", "Inverti visuale", "Invertir cámara"}},
     {"HD Textures", {"Textures HD", "HD-Texturen", "Texture HD", "Texturas HD"}},
+    {"Docked Resolution", {"Résolution (TV)", "Auflösung (TV)", "Risoluzione (TV)", "Resolución (TV)"}},
+    {"Widescreen HUD", {"HUD écran large", "Breitbild-HUD", "HUD widescreen", "HUD panorámico"}},
+    {"Corrected", {"Corrigé", "Korrigiert", "Corretto", "Corregido"}},
+    {"Stretched", {"Étiré", "Gestreckt", "Allungato", "Estirado"}},
     {"Language", {"Langue", "Sprache", "Lingua", "Idioma"}},
     {"Button Mapping", {"Configuration des boutons", "Tastenbelegung", "Configurazione tasti",
                         "Configuración de botones"}},
     {"Updates", {"Mises à jour", "Updates", "Aggiornamenti", "Actualizaciones"}},
+    {"Extra Logging", {"Journal détaillé", "Erweitertes Protokoll", "Log dettagliato", "Registro detallado"}},
     {"Close", {"Fermer", "Schließen", "Chiudi", "Cerrar"}},
     {"Restart", {"Redémarrer", "Neu starten", "Riavvia", "Reiniciar"}},
     {"Applies the changes", {"Applique les changements", "Übernimmt die Änderungen", "Applica le modifiche",
@@ -195,18 +205,21 @@ enum Item {
     kItemZcull,
     kItemTexBc1,
     kItemHdTextures,
+    kItemDockedRes,  // docked render size (switch/deko/device.cpp); applies at once
+    kItemHudAspect,  // widescreen HUD: corrected or stretched (port/src/fh_hud_aspect.c); applies at once
     kItemLanguage,
     kItemMapping,
     kItemTour,
     kItemShaderCache,
     kItemUpdate,
+    kItemExtraLog,  // Extra logging (switch/src/log_switch.h): more detail in logs/log.txt for bug reports
     kItemRestart,  // only listed while a changed setting waits for a restart (see tab_items)
     kItemClose,
     kItemCount
 };
 
-constexpr int kGameItems[] = {kItemFps,     kItemInvertLook, kItemHdTextures, kItemLanguage,
-                              kItemMapping, kItemUpdate,     kItemClose};
+constexpr int kGameItems[] = {kItemFps,     kItemInvertLook, kItemHdTextures, kItemDockedRes, kItemHudAspect, kItemLanguage,
+                              kItemMapping, kItemUpdate,     kItemExtraLog,  kItemClose};
 constexpr int kDebugItems[] = {kItemProfiler,    kItemThreads, kItemAudio, kItemOverlap,     kItemFrameStep,
                                kItemPacing,      kItemRenderer, kItemGpuClock, kItemCompression, kItemZcull,
                                kItemTexBc1,      kItemTour,    kItemShaderCache, kItemClose};
@@ -217,6 +230,16 @@ extern "C" int sfaUpdaterState(int* percent, char* tag, size_t tagSize);
 extern "C" const char* sfaUpdaterVersion(void);
 extern "C" void sfaUpdaterActivate(void);
 extern "C" void sfaRelaunch(void);  // switch/src/updater_switch.cpp: quits and starts this NRO again
+extern "C" void aurora_switch_set_docked_res(int value);  // switch/deko/device.cpp
+// Widescreen HUD (port/src/fh_hud_aspect.c): on draws the UI unstretched in the game's 16:9 mode, off keeps
+// the original stretched UI; switch_menu.ini hud_aspect, on by default.
+extern "C" void fhHudAspectSetEnabled(int on);
+extern "C" int fhHudAspectEnabled(void);
+
+// Docked Resolution: 0 720p (the system scales it to the TV), 1 900p, 2 1080p (switch_menu.ini docked_res).
+// Handheld always renders at 720p.
+int sDockedRes = 0;
+constexpr const char* kDockedResNames[3] = {"720p", "900p", "1080p"};
 
 bool restart_pending();
 
@@ -361,6 +384,10 @@ void sync_mapping() {
         return;
     }
     sMapPad = pad;
+    // Every controller change on port 1 goes in the log (rare, and it explains input problems in reports).
+    const char* padName = pad != nullptr ? SDL_GetGamepadName(pad) : nullptr;
+    std::printf("[sfa-nx] controller on port 1: %s\n",
+                pad == nullptr ? "none" : padName != nullptr ? padName : "(unnamed)");
     if (pad == nullptr || !read_aurora_sources(sDefaults)) {
         return;
     }
@@ -585,6 +612,8 @@ void load_settings() {
         int m[PAD_BUTTON_COUNT];
         if (std::sscanf(line, "fps=%d", &value) == 1) {
             sShowFps = value != 0;
+        } else if (std::sscanf(line, "extra_logging=%d", &value) == 1) {
+            sfa_log_set_extra(value);  // main_sfa.cpp applied it at start already; this keeps them in step
         } else if (std::sscanf(line, "invert_look=%d", &value) == 1) {
             sInvertLook = value != 0;
         } else if (std::sscanf(line, "threads=%d", &value) == 1) {
@@ -613,6 +642,10 @@ void load_settings() {
             sTexBc1 = value != 0;
         } else if (std::sscanf(line, "hd_textures=%d", &value) == 1) {
             sHdTextures = value != 0;
+        } else if (std::sscanf(line, "hud_aspect=%d", &value) == 1) {
+            fhHudAspectSetEnabled(value != 0);
+        } else if (std::sscanf(line, "docked_res=%d", &value) == 1) {
+            sDockedRes = value < 0 ? 0 : value > 2 ? 2 : value;
         } else if (std::sscanf(line, "language=%d", &value) == 1) {
             sLanguage = value >= 0 && value <= 5 && value != 4 ? value : 0;
         } else if (std::sscanf(line, "hd_texture_mb=%d", &value) == 1) {
@@ -649,6 +682,7 @@ void load_settings_done() {
     sBootHdTextures = sHdTextures;
     sBootLanguage = sLanguage;
     apply_gpu_clock();
+    aurora_switch_set_docked_res(sDockedRes);  // the renderer read the same ini value at start
 }
 
 // Rewrites switch_menu.ini with every setting, with # comment lines explaining the values for anyone
@@ -678,6 +712,11 @@ void save_settings() {
     std::fprintf(f, "zcull=%d\ntexture_bc1=%d\n", sZcull ? 1 : 0, sTexBc1 ? 1 : 0);
     std::fprintf(f, "# hd_textures: 1 load mods/*/textures (at next start); hd_texture_mb: their cache in MiB\n"
                     "hd_textures=%d\nhd_texture_mb=%d\n", sHdTextures ? 1 : 0, sHdTextureMb);
+    std::fprintf(f, "# docked_res: render size when docked, 0 720p, 1 900p, 2 1080p\ndocked_res=%d\n", sDockedRes);
+    std::fprintf(f, "# hud_aspect: in the game's 16:9 mode, 1 draws the HUD and menus unstretched, 0 stretched (original)\n"
+                    "hud_aspect=%d\n", fhHudAspectEnabled());
+    std::fprintf(f, "# extra_logging: 1 adds detail to logs/log.txt for bug reports (leak finder, GPU samples)\n"
+                    "extra_logging=%d\n", sfa_log_extra());
     std::fprintf(f, "# language (PAL disc, at next start): 0 English, 1 French, 2 German, 3 Italian, 5 Spanish\n"
                     "language=%d\n", sLanguage);
     // Kept only when enabled, so a normal ini never mentions the testing tab.
@@ -697,12 +736,28 @@ void save_settings() {
 // ---- menu -----------------------------------------------------------------------------------------------
 
 // Any connected controller; the menu listens to all of them through the first one SDL reports.
+// The pad's id is cached: update_input calls this every frame, and SDL_GetGamepads allocates the id list
+// (the SDL_GetJoysticks malloc in the profiles). SDL_GetGamepadFromID is a lookup with no allocation and
+// returns null once that pad is gone, which re-runs the scan; the scan also re-runs about once a second so
+// "first" follows SDL's order as pads come and go.
 SDL_Gamepad* first_gamepad() {
+    static SDL_JoystickID sCachedId = 0;
+    static int sFramesSinceScan = 0;
+    if (sCachedId != 0 && ++sFramesSinceScan < 60) {
+        if (SDL_Gamepad* pad = SDL_GetGamepadFromID(sCachedId)) {
+            return pad;
+        }
+    }
+    sFramesSinceScan = 0;
+    sCachedId = 0;
     int count = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&count);
     SDL_Gamepad* pad = nullptr;
     for (int i = 0; i < count && pad == nullptr; ++i) {
         pad = SDL_GetGamepadFromID(ids[i]);
+        if (pad != nullptr) {
+            sCachedId = ids[i];
+        }
     }
     SDL_free(ids);
     return pad;
@@ -726,7 +781,11 @@ void toggle(int item, int direction) {
     } else if (item == kItemInvertLook) {
         sInvertLook = !sInvertLook;
     } else if (item == kItemProfiler) {
-        sfaProfSetEnabled(!sfaProfEnabled());
+        // Cycles Off -> On -> On (small) -> Off; D-Pad Left goes the other way.
+        const int state = !sfaProfEnabled() ? 0 : sProfCompact ? 2 : 1;
+        const int next = (state + (direction < 0 ? 2 : 1)) % 3;
+        sProfCompact = next == 2;
+        sfaProfSetEnabled(next != 0);
         return; // not saved: the profiler always starts off
     } else if (item == kItemThreads) {
         int index = 0;
@@ -764,6 +823,15 @@ void toggle(int item, int direction) {
         sTexBc1 = !sTexBc1;
     } else if (item == kItemHdTextures) {
         sHdTextures = !sHdTextures;
+    } else if (item == kItemDockedRes) {
+        // 720p -> 900p -> 1080p (A and Right forward, Left back); the renderer follows at once.
+        sDockedRes = (sDockedRes + (direction < 0 ? 2 : 1)) % 3;
+        aurora_switch_set_docked_res(sDockedRes);
+        std::printf("[sfa-nx] docked resolution: %s\n", kDockedResNames[sDockedRes]);
+    } else if (item == kItemExtraLog) {
+        sfa_log_set_extra(!sfa_log_extra());  // applies at once and logs the change
+    } else if (item == kItemHudAspect) {
+        fhHudAspectSetEnabled(!fhHudAspectEnabled());  // logs the new state
     } else if (item == kItemLanguage) {
         // Step through kLanguages (A and Right forward, Left back).
         constexpr int n = sizeof(kLanguages) / sizeof(kLanguages[0]);
@@ -912,10 +980,23 @@ void update_fps() {
     }
 }
 
-// FPS counter in the top-left corner on a translucent box.
-void draw_fps() {
-    char text[32];
-    std::snprintf(text, sizeof(text), "%.0f FPS", sFps);
+// FPS counter in the top-left corner on a translucent box. With the small profiler on, the same box also
+// shows "PROF" and the sampler count since the last profile dump (it keeps rising, so you can see it runs);
+// with only the small profiler on (FPS off), the box holds just that tag.
+void draw_fps(bool fps, bool prof) {
+    char text[64];
+    unsigned long long samples = 0;
+    if (prof) {
+        double avg[4], mx[4];
+        sfaProfSections(avg, mx, &samples);  // only the frame count is used here
+    }
+    if (fps && prof) {
+        std::snprintf(text, sizeof(text), "%.0f FPS  PROF %llu", sFps, samples);
+    } else if (prof) {
+        std::snprintf(text, sizeof(text), "PROF %llu", samples);
+    } else {
+        std::snprintf(text, sizeof(text), "%.0f FPS", sFps);
+    }
     ImDrawList* list = ImGui::GetForegroundDrawList();
     const float size = 28.0f;
     const ImVec2 pos(16.0f, 12.0f);
@@ -1287,13 +1368,14 @@ void draw_menu() {
     const char* labels[kItemCount] = {"Show FPS",      "Invert Look",   "Profiler",
                                       "Threads",       "Audio Thread",         "Frame Overlap", "Frame Step",
                                       "Pacing",        "Renderer",
-                                      "GPU Clock",     "Render Compression",   "Z-Cull",        "Texture BC1",   "HD Textures",
-                                      "Language",      "Button Mapping", "Shader Tour",         "Clear Shader Cache", "Updates",
+                                      "GPU Clock",     "Render Compression",   "Z-Cull",        "Texture BC1",   "HD Textures",   "Docked Resolution", "Widescreen HUD",
+                                      "Language",      "Button Mapping", "Shader Tour",         "Clear Shader Cache", "Updates",        "Extra Logging",
                                       "Restart",       "Close"};
     const bool values[kItemCount] = {sShowFps, sInvertLook, sfaProfEnabled() != 0, false,
                                      fhAIThreaded() != 0, aurora_frame_overlap(), sWholeSteps, false, false,
                                      false, false, sZcull,
-                                     sTexBc1, sHdTextures, false, false, false, false, false, false, false};
+                                     sTexBc1, sHdTextures, false, fhHudAspectEnabled() != 0, false, false, false, false, false,
+                                     sfa_log_extra() != 0, false, false};
     PanelRow rows[kMaxPanelRows];
     int count = 0;
     const int* items = tab_items(sTab, &count);
@@ -1315,6 +1397,9 @@ void draw_menu() {
             std::snprintf(v, vs, "%s", T("Applies the changes"));
         } else if (i == kItemMapping) {
             std::snprintf(v, vs, "%s", sCustom ? T("Custom") : "");
+        } else if (i == kItemProfiler) {
+            // Three states: Off, On (full phase box), Small (just "PROF <samples>" by the FPS counter).
+            std::snprintf(v, vs, "< %s >", !sfaProfEnabled() ? "Off" : sProfCompact ? "Small" : "On");
         } else if (i == kItemThreads) {
             std::snprintf(v, vs, "< %s >", melee_nx_perf_affinity_name(melee_nx_perf_affinity()));
         } else if (i == kItemFrameStep) {
@@ -1343,6 +1428,10 @@ void draw_menu() {
                                  : i == kItemTexBc1 ? sTexBc1 != sBootTexBc1
                                                     : sHdTextures != sBootHdTextures;
             std::snprintf(v, vs, "%s%s", T(values[i] ? "On" : "Off"), pending ? T("  (restart)") : "");
+        } else if (i == kItemDockedRes) {
+            std::snprintf(v, vs, "< %s >", kDockedResNames[sDockedRes]);
+        } else if (i == kItemHudAspect) {
+            std::snprintf(v, vs, "%s", T(fhHudAspectEnabled() ? "Corrected" : "Stretched"));
         } else if (i == kItemLanguage) {
             // Only the PAL disc carries the other languages; other discs always run in their own.
             if (sfaDiscIsPal()) {
@@ -1409,10 +1498,12 @@ extern "C" void sfaSwitchMenuFrame(void) {
     }
     sfaShaderTourFrame();
     update_fps();
-    if (sShowFps) {
-        draw_fps();
+    // Small profiler: one line beside the FPS counter; full profiler: the phase box under it.
+    const bool profSmall = sfaProfEnabled() && sProfCompact;
+    if (sShowFps || profSmall) {
+        draw_fps(sShowFps, profSmall);
     }
-    if (sfaProfEnabled()) {
+    if (sfaProfEnabled() && !sProfCompact) {
         draw_profiler(sShowFps ? 52.0f : 12.0f);
     }
     if (sOpen) {

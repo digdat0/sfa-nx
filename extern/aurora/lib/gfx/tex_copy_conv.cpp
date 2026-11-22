@@ -251,6 +251,62 @@ static constexpr std::string_view FragB8 = R"(
 }
 )"sv;
 
+// SFA-NX: GX_CTF_B8 with the box blur split in two passes (execute_b8_split). FragB8 above samples a
+// window x window grid per pixel: 256 samples for the 16x16 blur Aurora applies to B8 copies, which stands in
+// for the game's CPU boxBlurTexture on its object shadow texture (newshadows.c). On Switch that one 128x128
+// copy (256x192 at 720p) cost 4.9 ms of GPU. A box filter is separable: FragB8H sums the window along x into a
+// temporary texture the size of the destination, FragB8V sums that along y, 2 x window samples in all. Same
+// sample positions, the same inside-the-source-rect mask (a product of an x and a y test) and the same divisor
+// (window * window, split as window per pass), so the result matches up to 8-bit rounding of the middle step.
+// FragB8H: source = the EFB, uv = source uv (the shared vertex shader). window <= 1 (no blur): plain copy.
+static constexpr std::string_view FragB8H = R"(
+@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    let window = i32(ubuf.blur.x);
+    if (window <= 1) {
+        let b = sample_efb(in.uv).b;
+        return vec4f(b, b, b, b);
+    }
+    let stepX = ubuf.scale.x / ubuf.blur.z;
+    let lo = ubuf.offset;
+    let hi = ubuf.offset + ubuf.scale;
+    let half = window / 2;
+    var sum = 0.0;
+    for (var x: i32 = -half; x < window - half; x = x + 1) {
+        let uv = vec2f(in.uv.x + f32(x) * stepX, in.uv.y);
+        let inside = uv.x >= lo.x && uv.x < hi.x;
+        let v = textureSampleLevel(src, src_samp, clamp(uv, lo, hi), 0.0).b;
+        sum = sum + select(0.0, v, inside);
+    }
+    let b = sum / f32(window);
+    return vec4f(b, b, b, b);
+}
+)"sv;
+
+// FragB8V: source = FragB8H's temporary texture (same size as the destination), so the destination uv is the
+// fragment position over its size. One logical (GameCube) pixel is 1 / blur.w of that uv. window <= 1: copies
+// the texel under the pixel (a linear sample at a texel centre is that texel).
+static constexpr std::string_view FragB8V = R"(
+@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    let duv = in.pos.xy / vec2f(textureDimensions(src));
+    let window = i32(ubuf.blur.x);
+    if (window <= 1) {
+        let b = textureSampleLevel(src, src_samp, duv, 0.0).b;
+        return vec4f(b, b, b, b);
+    }
+    let stepY = 1.0 / ubuf.blur.w;
+    let half = window / 2;
+    var sum = 0.0;
+    for (var y: i32 = -half; y < window - half; y = y + 1) {
+        let uv = vec2f(duv.x, duv.y + f32(y) * stepY);
+        let inside = uv.y >= 0.0 && uv.y < 1.0;
+        let v = textureSampleLevel(src, src_samp, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).b;
+        sum = sum + select(0.0, v, inside);
+    }
+    let b = sum / f32(window);
+    return vec4f(b, b, b, b);
+}
+)"sv;
+
 // GX_CTF_RG8: 8-bit red + 8-bit green -> RG8Unorm
 static constexpr std::string_view FragRG8 = R"(
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
@@ -363,6 +419,17 @@ static wgpu::BindGroupLayout g_depthSnapshotBindGroupLayout;
 static wgpu::BindGroupLayout g_depthSnapshotBindGroupLayoutMS;
 static wgpu::RenderPipeline g_depthSnapshotPipeline;
 static wgpu::RenderPipeline g_depthSnapshotPipelineMS;
+// SFA-NX: the split B8 blur (FragB8H / FragB8V) and its temporary textures, one per destination size (the
+// object shadow copy is the only B8 user, so one or two sizes). Used on the render worker only.
+static wgpu::RenderPipeline g_b8HorizontalPipeline;
+static wgpu::RenderPipeline g_b8VerticalPipeline;
+struct B8Temp {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  TextureHandle texture;
+};
+static std::array<B8Temp, 4> g_b8Temps;
+static size_t g_b8TempNext = 0; // round-robin replacement when all four sizes are taken
 
 static wgpu::BindGroupLayout create_depth_snapshot_layout(bool multisampled, const char* label) {
   const std::array entries{
@@ -550,6 +617,11 @@ void initialize() {
       Log.fatal("Output format mismatch for {}", conv.fmt);
     }
   }
+  // SFA-NX: the two halves of the B8 blur (same bind group layout and output format as the B8 pipeline)
+  g_b8HorizontalPipeline = create_pipeline({GX_CTF_B8, FragB8H, wgpu::TextureFormat::RGBA8Unorm, "TexCopyConv B8 H"},
+                                           ShaderPreamble, g_bindGroupLayout);
+  g_b8VerticalPipeline = create_pipeline({GX_CTF_B8, FragB8V, wgpu::TextureFormat::RGBA8Unorm, "TexCopyConv B8 V"},
+                                         ShaderPreamble, g_bindGroupLayout);
   // Skip depth copies in compatibility mode
   if (webgpu::g_hasCoreFeatures) {
     for (const auto& conv : DepthConvPipelines) {
@@ -592,10 +664,115 @@ void shutdown() {
   g_depthSnapshotBindGroupLayoutMS = {};
   g_depthSnapshotPipeline = {};
   g_depthSnapshotPipelineMS = {};
+  g_b8HorizontalPipeline = {}; // SFA-NX: split B8 blur
+  g_b8VerticalPipeline = {};
+  g_b8Temps = {};
+}
+
+// SFA-NX: the render pass label for a conversion, e.g. "TexCopyConv B8", so the deko3d GPU timing lines
+// ([dk] gpu time ... pass N "TexCopyConv B8") show which format each copy pass converts to. Static strings
+// (the pass keeps the pointer only for the call).
+static const char* pass_label(const ConvRequest& req, const wgpu::RenderPipeline& pipeline) {
+  if (pipeline.Get() == g_blitPipeline.Get()) {
+    return "TexCopyConv Blit";
+  }
+  for (const auto& conv : ConvPipelines) {
+    if (conv.fmt == req.fmt) {
+      return conv.label;
+    }
+  }
+  for (const auto& conv : DepthConvPipelines) {
+    if (conv.fmt == req.fmt) {
+      return conv.label;
+    }
+  }
+  return "TexCopyConv Pass";
+}
+
+// SFA-NX: one full-screen triangle with `pipeline` into `target`, sampling `srcView` with the request's
+// uniforms (the body execute() used to inline, shared by the split B8 passes).
+static void draw_conv_pass(const wgpu::CommandEncoder& cmd, const ConvRequest& req, const wgpu::RenderPipeline& pipeline,
+                           const wgpu::Sampler& sampler, const wgpu::TextureView& srcView,
+                           const wgpu::TextureView& target, const char* label) {
+  const std::array bindGroupEntries{
+      wgpu::BindGroupEntry{
+          .binding = 0,
+          .sampler = sampler,
+      },
+      wgpu::BindGroupEntry{
+          .binding = 1,
+          .textureView = srcView,
+      },
+      wgpu::BindGroupEntry{
+          .binding = 2,
+          .buffer = detail::resources().uniformBuffer,
+          .offset = req.uniformRange.offset,
+          .size = req.uniformRange.size,
+      },
+  };
+  const wgpu::BindGroupDescriptor bindGroupDescriptor{
+      .layout = g_bindGroupLayout,
+      .entryCount = bindGroupEntries.size(),
+      .entries = bindGroupEntries.data(),
+  };
+  const auto bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
+  const std::array colorAttachments{
+      wgpu::RenderPassColorAttachment{
+          .view = target,
+          .loadOp = wgpu::LoadOp::Clear,
+          .storeOp = wgpu::StoreOp::Store,
+          .clearValue = {0.0, 0.0, 0.0, 0.0},
+      },
+  };
+  const wgpu::RenderPassDescriptor renderPassDescriptor{
+      .label = label,
+      .colorAttachmentCount = colorAttachments.size(),
+      .colorAttachments = colorAttachments.data(),
+      .timestampWrites = webgpu::gpu_prof::pass_writes("EFB copy convert"),
+  };
+  const auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+  pass.SetPipeline(pipeline);
+  pass.SetBindGroup(0, bindGroup);
+  pass.Draw(3);
+  pass.End();
+}
+
+// SFA-NX: the temporary texture for the horizontal B8 pass, the size of the destination (kept between frames).
+static const TextureHandle& b8_temp(uint32_t width, uint32_t height) {
+  for (auto& temp : g_b8Temps) {
+    if (temp.texture && temp.width == width && temp.height == height) {
+      return temp.texture;
+    }
+  }
+  auto& slot = g_b8Temps[g_b8TempNext];
+  g_b8TempNext = (g_b8TempNext + 1) % g_b8Temps.size();
+  slot.width = width;
+  slot.height = height;
+  slot.texture = new_conv_texture(width, height, GX_CTF_B8, "TexCopyConv B8 blur temp");
+  Log.info("B8 blur temp texture {}x{}", width, height);
+  return slot.texture;
+}
+
+// SFA-NX: GX_CTF_B8 copy as two passes (FragB8H into a temporary texture, FragB8V into the destination);
+// see FragB8H for why. The vertical pass samples the temporary texture linearly, as the one-pass shader
+// sampled the EFB (B8 copies are scaled, so their sampler was the linear one).
+static void execute_b8_split(const wgpu::CommandEncoder& cmd, const ConvRequest& req) {
+  const auto& temp = b8_temp(req.dst->size.width, req.dst->size.height);
+  const auto& sampler = req.sampleFilter == SampleFilter::Linear ? g_linearSampler : g_nearestSampler;
+  draw_conv_pass(cmd, req, g_b8HorizontalPipeline, sampler, req.srcView, temp->attachmentTextureView,
+                 "TexCopyConv B8 H");
+  draw_conv_pass(cmd, req, g_b8VerticalPipeline, g_linearSampler, temp->sampleTextureView,
+                 req.dst->attachmentTextureView, "TexCopyConv B8 V");
 }
 
 static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, const wgpu::RenderPipeline& pipeline) {
   if (!pipeline) {
+    return;
+  }
+  // SFA-NX: the blurred B8 copy takes the two-pass path (the blit pipeline is a plain copy: not this)
+  if (req.fmt == GX_CTF_B8 && pipeline.Get() != g_blitPipeline.Get() && g_b8HorizontalPipeline &&
+      g_b8VerticalPipeline) {
+    execute_b8_split(cmd, req);
     return;
   }
   wgpu::BindGroup bindGroup;
@@ -657,7 +834,7 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
       },
   };
   const wgpu::RenderPassDescriptor renderPassDescriptor{
-      .label = "TexCopyConv Pass",
+      .label = pass_label(req, pipeline), // SFA-NX: names the format ("TexCopyConv I8", ...)
       .colorAttachmentCount = colorAttachments.size(),
       .colorAttachments = colorAttachments.data(),
       .timestampWrites = webgpu::gpu_prof::pass_writes("EFB copy convert"),

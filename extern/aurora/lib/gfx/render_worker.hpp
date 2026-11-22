@@ -53,7 +53,13 @@ private:
   mutable std::mutex m_mutex;
   std::condition_variable m_notEmpty;
   std::condition_variable m_notFull;
-  std::deque<QueueItem> m_items;
+  // SFA-NX: a fixed ring of m_capacity slots instead of a std::deque. The deque allocated and freed a
+  // 512-byte node every 7 items as passes streamed through (two per pass, ~25 passes a frame), the
+  // churn that fragmented newlib's heap on Switch. Slots are reused; a popped slot is reset so its
+  // callback and sync state are released at once.
+  std::vector<QueueItem> m_ring;
+  size_t m_head = 0;  // index of the oldest item
+  size_t m_count = 0; // items queued
   bool m_closed = false;
 };
 

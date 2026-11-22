@@ -128,7 +128,11 @@ struct State::Impl {
   std::shared_ptr<const BindingSet> set;
   std::unordered_map<input::SourceId, input::SourceState> admitted;
   std::vector<float> contributions;            // One per binding in `set`.
-  std::unordered_map<ControlId, float> values; // Non-zero values only.
+  // SFA-NX: entries stay once created and may hold 0 (value() reads 0 either way; cancel_all skips them).
+  // Upstream erased a control on 0 and re-inserted it on the next non-zero value: a map node freed and
+  // allocated every time a stick crossed its dead zone, on the main thread, during play.
+  std::unordered_map<ControlId, float> values;
+  std::vector<ControlId> scratchTargets; // SFA-NX: update()'s list, kept for its capacity (main thread only)
   std::map<ProducerId, Producer> producers;
   ProducerId nextProducer = 1;
 
@@ -208,18 +212,17 @@ struct State::Impl {
       if (next == previous) {
         continue;
       }
-      if (next == 0.f) {
-        values.erase(control);
-      } else {
-        values[control] = next;
-      }
+      values[control] = next; // SFA-NX: 0 kept as an entry (see `values`)
       changes.push_back({.control = control, .previousValue = previous, .value = next, .reason = reason});
     }
   }
 
   void update(input::SourceId source, const Address& address, Reason reason, std::vector<ControlChange>& changes) {
     const auto bindings = list();
-    std::vector<ControlId> targets;
+    // SFA-NX: reused vector instead of a new one per input event. refresh() only reads it, so it can be
+    // cleared on the next call.
+    auto& targets = scratchTargets;
+    targets.clear();
     for (size_t i = 0; i < bindings.size(); ++i) {
       if (!uses(bindings[i], source, address)) {
         continue;
@@ -252,6 +255,9 @@ struct State::Impl {
     std::vector<ControlChange> changes;
     changes.reserve(values.size());
     for (const auto& [control, previous] : values) {
+      if (previous == 0.f) {
+        continue; // SFA-NX: a kept zero entry (see `values`): nothing to cancel
+      }
       changes.push_back({.control = control, .previousValue = previous, .value = 0.f, .reason = Reason::Cancelled});
     }
     values.clear();

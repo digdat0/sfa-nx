@@ -67,13 +67,18 @@ if(MELEE_NX_DEKO_GPU_CHECKPOINTS)
   endif()
   target_compile_definitions(melee_deko PRIVATE COS_DK_GPU_CHECKPOINTS=1)
 endif()
+# deko3d 0.5.0 is built from switch/third_party/deko3d: devkitPro's source with SFA-NX's fixes, listed in
+# its PATCHES.md. It replaces devkitPro's libdeko3d.a / libdeko3dd.a; deko3d_debug is the build that
+# checks every call.
+add_subdirectory("${_repo}/switch/third_party/deko3d" "${CMAKE_BINARY_DIR}/deko3d" EXCLUDE_FROM_ALL)
 if(MELEE_NX_DEKO_DEBUG)
-  set(_deko_library deko3dd)
+  set(_deko_library deko3d_debug)
   target_compile_definitions(melee_deko PRIVATE COS_DK_DEBUG_LIB=1)
 else()
-  set(_deko_library deko3d)
+  set(_deko_library deko3d_release)
 endif()
-target_link_libraries(melee_deko PRIVATE melee_deko_builtin xxhash uamlib
+# absl::flat_hash_map: dk_objects.cpp's shadow maps (header-only include path; its symbols are in Dawn's library)
+target_link_libraries(melee_deko PRIVATE melee_deko_builtin xxhash uamlib absl::flat_hash_map
   PUBLIC dawn::webgpu_dawn ${_deko_library} z nx)
 
 # Aurora's seams (builder/integrate-deko.py edits the staged copy behind this definition).
@@ -93,4 +98,6 @@ set(MELEE_GFX_LINK_LIBS "\"${MELEE_DAWN_BUILD}/src/dawn/native/libwebgpu_dawn.a\
 foreach(_archive IN LISTS _dawn_archives)
   string(APPEND MELEE_GFX_LINK_LIBS " \"${_archive}\"")
 endforeach()
-string(APPEND MELEE_GFX_LINK_LIBS " -l${_deko_library}")
+# The vendored deko3d archive goes in by path, because this string cannot hold generator expressions.
+# melee_deko's link to the target above makes sure the archive is built first.
+string(APPEND MELEE_GFX_LINK_LIBS " \"${CMAKE_BINARY_DIR}/deko3d/lib${_deko_library}.a\"")

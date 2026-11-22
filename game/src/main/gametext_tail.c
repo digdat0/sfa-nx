@@ -14,6 +14,7 @@
 #include "main/textrender.h"
 #include "main/textrender_internal.h"
 #include "main/audio/sfx_trigger_ids.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD correction (text box clip)
 
 /* In-string formatting control codes (Unicode PUA). */
 #define TEXT_CTRL_SCALE 0xf8f4
@@ -175,7 +176,9 @@ void gameTextRenderById(int a, int b, int c)
         }
         if (gGameTextMeasureOnly == 0)
         {
-            gxSetScissorRect(0, 0, slot->x, slot->y, slot->x + slot->width, slot->y + slot->height);
+            // SFA-NX: the box's clip moves with its text under the widescreen HUD correction (fhHudMapX)
+            gxSetScissorRect(0, 0, (int)fhHudMapX((f32)slot->x), slot->y,
+                             (int)(fhHudMapX((f32)(slot->x + slot->width)) + 0.5f), slot->y + slot->height);
         }
     }
 

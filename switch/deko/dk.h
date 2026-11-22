@@ -183,7 +183,9 @@ struct PresentImage {
 };
 // False when the window must be resized first: frame_present then acquires under the lock as before.
 bool present_acquire(PresentImage* image);
-void frame_present(PictureFn picture, void* user, const PresentImage* acquired = nullptr);
+// fullWindow: the picture covers the whole window with one draw that needs no depth (the game's present),
+// so the window's colour and depth clears are skipped.
+void frame_present(PictureFn picture, void* user, const PresentImage* acquired = nullptr, bool fullWindow = false);
 // Opt-in, bounded GPU readbacks for black-frame diagnosis. Enabled by the file
 // sdmc:/switch/SFA-NX/deko-capture.flag; inactive during normal runs.
 bool capture_frame();

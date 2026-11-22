@@ -75,6 +75,9 @@ u32 __wrap_PADRead(void* status) {
         lastKey[i] = key[i];
     }
     if (player != NULL && calls % 600 == 0) changed = 1; // periodic snapshot while a player exists
+    // SFA-NX: the trace lines are off by default (~6k lines a session); build with -DSFA_NX_INPUT_TRACE
+    // to print them again. The state is still tracked so turning it on needs no other change.
+#ifdef SFA_NX_INPUT_TRACE
     if (changed && lines < 6000) {
         ++lines;
         printf("[input] call %llu raw 0x%04x stick %d,%d | held 0x%x pressed 0x%x mask 0x%x jd %u dvd %u npc %d "
@@ -86,6 +89,10 @@ u32 __wrap_PADRead(void* status) {
                ctl, player != NULL ? player->anim.localPosX : 0.0f, player != NULL ? player->anim.localPosZ : 0.0f,
                timeDelta);
     }
+#else
+    (void)changed;
+    (void)lines;
+#endif
     sfaSwitchMenuFilterPad(status);
     return rc;
 }

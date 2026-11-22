@@ -234,7 +234,7 @@ __attribute__((noreturn)) static void kartpad_fast_exit(void) {
     melee_nx_sqlite_flush_all();
     melee_nx_log_shutdown();
     fflush(NULL);
-    /* fd 1 and fd 2 are the run's logs/stdout-NNN.log (main_sfa.cpp's
+    /* fd 1 and fd 2 are the run's logs/log.txt (main_sfa.cpp's
        redirect_stdio); commit them before the FS session goes away. */
     fsync(STDOUT_FILENO);
     fsync(STDERR_FILENO);

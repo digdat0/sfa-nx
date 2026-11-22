@@ -7,7 +7,8 @@
 #include <algorithm>
 #include <cstring>
 #include <mutex>
-#include <unordered_map>
+
+#include <absl/container/flat_hash_map.h>
 
 extern "C" int sfaSwitchMenuIniValue(const char* key, int def) __attribute__((weak));
 
@@ -39,11 +40,17 @@ namespace {
 // Every lookup and update is a short map operation, so a plain mutex: on devkitPro newlib a
 // shared_mutex is a pthread rwlock whose every unlock broadcasts a condition variable (a kernel
 // call), and draws looked objects up several times each.
+// SFA-NX: open-addressing maps (absl, as Aurora uses) instead of std::unordered_map. Each unordered_map insert
+// allocated a node (one per bind group, created per draw batch, and per view) and each lookup did a modulo
+// and a pointer chase while holding g_mutex, which the FIFO thread and the render worker share. A flat map
+// stores the entry in its slot array: no allocation per object, shorter time under the lock. Values are
+// shadow pointers, so a rehash moves only the pointers; no iterator is kept past its lock.
+template <class T> using ShadowMap = absl::flat_hash_map<const void*, T*>;
 std::mutex g_mutex;
-std::unordered_map<const void*, Tex*> g_textures;
-std::unordered_map<const void*, View*> g_views;
-std::unordered_map<const void*, Samp*> g_samplers;
-std::unordered_map<const void*, BindGroup*> g_bindGroups;
+ShadowMap<Tex> g_textures;
+ShadowMap<View> g_views;
+ShadowMap<Samp> g_samplers;
+ShadowMap<BindGroup> g_bindGroups;
 ObjectStats g_stats;  // under g_mutex
 
 // descriptor slots of released views, retired by the render worker
@@ -56,7 +63,7 @@ bool g_compression = false;
 bool g_depthCompression = false;
 
 // The shadow for a Dawn handle, or null.
-template <class T> T* find(std::unordered_map<const void*, T*>& map, const void* h) {
+template <class T> T* find(ShadowMap<T>& map, const void* h) {
     if (!h) return nullptr;
     std::lock_guard<std::mutex> lock(g_mutex);
     auto it = map.find(h);
@@ -122,7 +129,7 @@ void destroy(BindGroup* g) {
 }
 
 // Drops one reference; at zero the shadow leaves its map and the caller destroys it (true).
-template <class T> bool drop(std::unordered_map<const void*, T*>& map, T* obj, uint64_t ObjectStats::*alive) {
+template <class T> bool drop(ShadowMap<T>& map, T* obj, uint64_t ObjectStats::*alive) {
     if (obj->refs.fetch_sub(1, std::memory_order_acq_rel) != 1) return false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -578,6 +585,7 @@ WGPUBindGroup __wrap_wgpuDeviceCreateBindGroup(WGPUDevice device, WGPUBindGroupD
     kartpad_deko_group_create(g, d);
     auto* group = new BindGroup;
     group->handle = g;
+    group->entries.reserve(d->entryCount); // SFA-NX: one allocation, not push_back growth (heap line sites)
     for (size_t i = 0; i < d->entryCount; i++) {
         const WGPUBindGroupEntry& e = d->entries[i];
         if (!e.textureView && !e.sampler) continue;

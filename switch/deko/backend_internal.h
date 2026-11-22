@@ -266,7 +266,6 @@ struct State {
   std::array<uint8_t, kImmediateBytes> immediates{};
   DkGpuAddr immediateGpu = 0;  // the copy of `immediates` in this frame's stream; 0 until a draw needs it
   bool immediatesDirty = false;
-  bool splitAlphaDirty = false;
   std::shared_ptr<Buffer> index;
   uint64_t indexOffset = 0;
   DkIdxFormat indexFormat = DkIdxFormat_Uint16;
@@ -285,6 +284,18 @@ bool draw_copy(const DkImageView &sv, const DkImageView &dv, uint32_t w, uint32_
 void gpu_timing_pass_begin();
 void gpu_timing_pass_end(const char *label, const char *target, uint32_t width, uint32_t height, uint64_t draws);
 void gpu_timing_present();
+// SFA-NX: per-draw GPU cost probe (gpu_timing.cpp). While a probe frame is being sampled, kd::draw brackets
+// each draw with gpu_timing_draw_begin / gpu_timing_draw_end, passing what identifies the draw.
+struct GpuDrawInfo {
+  uint64_t vsHash = 0, fsHash = 0;  // GLSL hashes of the draw's two shader stages
+  uint32_t count = 0, instances = 0; // vertices or indices, and instances
+  bool indexed = false, blend = false, depthTest = false, depthWrite = false;
+  uint32_t viewportW = 0, viewportH = 0;
+  const Tex *tex = nullptr; // the first texture the fragment stage samples (null: none)
+};
+bool gpu_timing_draw_sampling();
+void gpu_timing_draw_begin();
+void gpu_timing_draw_end(const GpuDrawInfo &info);
 void draw(bool indexed, uint32_t count, uint32_t instances, uint32_t first, int32_t base,
           uint32_t firstInstance);
 // Append a replay closure to an encoder's or a pass's command list.

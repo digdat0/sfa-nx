@@ -28,6 +28,7 @@
 #include "main/mm.h"
 #include "main/newshadows.h"
 #include "main/objprint.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD aspect correction
 #include "main/maketex.h"
 #include "main/pad.h"
 #include "main/pi_dolphin.h"
@@ -1899,7 +1900,8 @@ void hudDrawRect(int x1, int y1, int x2, int y2, GXColor color)
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans x1..x2
+    fhHudSetProjection((f32)x1, (f32)x2);
     if ((u32)gGxZModeCompareEnable != 0 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 0 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
@@ -2033,7 +2035,9 @@ void hudDrawTriangle(f32 x1, f32 y1, f32 x2, f32 y2, f32 x3, f32 y3, GXColor col
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans the smallest to the largest of x1, x2, x3
+    fhHudSetProjection(x1 < x2 ? (x1 < x3 ? x1 : x3) : (x2 < x3 ? x2 : x3),
+                       x1 > x2 ? (x1 > x3 ? x1 : x3) : (x2 > x3 ? x2 : x3));
     if ((u32)gGxZModeCompareEnable != 0 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 0 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
@@ -2086,7 +2090,8 @@ void drawOrthoTexturedQuad(int x1, int y1, int x2, int y2, f32 u1, f32 v1, f32 u
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans x1..x2 (quarter pixels)
+    fhHudSetProjection(0.25f * (f32)x1, 0.25f * (f32)x2);
     fhLoadIdentityPosMtx();
     GXBegin(GX_QUADS, GX_VTXFMT1, 4);
 
@@ -2117,7 +2122,8 @@ void textRenderChar(int x1, int y1, int x2, int y2, f32 u1, f32 v1, f32 u2, f32 
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans x1..x2 (quarter pixels)
+    fhHudSetProjection(0.25f * (f32)x1, 0.25f * (f32)x2);
     fhLoadIdentityPosMtx();
     GXBegin(GX_QUADS, GX_VTXFMT1, 4);
 
@@ -2193,7 +2199,8 @@ void drawPartialTexture(void* obj, f32 sx, f32 sy, int alpha_mod, int scale, int
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     selectTextureWithSecondary((Texture*)obj, 0);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans sx plus width scaled by scale/256
+    fhHudSetProjection(sx, sx + (f32)(((u32)width * (u16)scale) >> 8));
     if ((u32)gGxZModeCompareEnable != 0 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 0 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
@@ -2261,7 +2268,8 @@ void drawRect(f32 sx, f32 sy, int x, int y)
     GXSetNumTexGens(0);
     GXSetNumTevStages(1);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans sx..sx + x
+    fhHudSetProjection(sx, sx + (f32)x);
     if ((u32)gGxZModeCompareEnable != 1 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 1 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_TRUE, GX_ALWAYS, GX_TRUE);
@@ -2347,7 +2355,8 @@ void drawScaledTexture(void* obj, f32 sx, f32 sy, int alpha_mod, int scale, int 
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     selectTextureWithSecondary((Texture*)obj, 0);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans sx plus width scaled by scale/256
+    fhHudSetProjection(sx, sx + (f32)(((u32)width * (u16)scale) >> 8));
     if ((u32)gGxZModeCompareEnable != 0 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 0 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
@@ -2472,7 +2481,8 @@ void hudDrawColored(Texture* obj, int x, int y, u32* color, int scale, int flag)
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     selectTextureWithSecondary((Texture*)obj, 0);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans x plus the texture width scaled by scale/256
+    fhHudSetProjection((f32)x, (f32)x + (f32)((((Texture*)obj)->width * (u16)scale) / 256));
     if ((u32)gGxZModeCompareEnable != 0 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 0 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
@@ -2576,7 +2586,8 @@ void drawTexture(void* obj, f32 sx, f32 sy, int alpha_mod, int scale)
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     selectTextureWithSecondary((Texture*)obj, 0);
     GXSetCullMode(GX_CULL_NONE);
-    GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
+    // SFA-NX: widescreen HUD aspect correction (port/src/fh_hud_aspect.c); the quad spans sx plus the texture width scaled by scale/256
+    fhHudSetProjection(sx, sx + (f32)((((Texture*)obj)->width * (u16)scale) / 256));
     if ((u32)gGxZModeCompareEnable != 0 || gGxZModeCompareFunc != 7 || gGxZModeUpdateEnable != 0 || gGxZModeValid == 0)
     {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);

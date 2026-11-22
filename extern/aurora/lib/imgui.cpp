@@ -247,6 +247,14 @@ DrawData freeze() noexcept {
 
   auto* data = ImGui::GetDrawData();
   data->FramebufferScale = ImGui::GetIO().DisplayFramebufferScale;
+  // SFA-NX: nothing to draw this frame (no menu, FPS counter or overlay): no copy. The copy cloned every draw
+  // list each frame (allocations on the game thread, frees on the render worker), and an empty DrawData lets
+  // submit_frame skip the ImGui render pass (aurora.cpp). Safe for textures: ImGui 1.91's WebGPU backend
+  // builds its font atlas in new_frame, not in RenderDrawData. The SDL renderer path keeps the old behaviour
+  // (its render() clears and presents the SDL renderer every frame).
+  if (!g_useSdlRenderer && data->TotalVtxCount == 0) {
+    return DrawData{};
+  }
   auto frozen = std::make_shared<DrawData::Impl>();
   frozen->drawData = *data;
   frozen->drawLists.reserve(data->CmdListsCount);

@@ -238,6 +238,9 @@ void memory_init() {
     dklog("creating the command buffer");
     log_flush();
     R.cmd = dkCmdBufCreate(&cm);
+    // Marks logs from builds linked with switch/third_party/deko3d, so a log shows the fixes are in (its
+    // PATCHES.md: alpha blend factor, control-memory chunk leak).
+    dklog("deko3d 0.5.0 from source with SFA-NX patches 1-3 (blend alpha factor, control chunk leak)");
     char what[96];
     snprintf(what, sizeof what, "command memory ring (%u frames)", kFrames);
     g_cmdMem = make_block(kFrames * kCmdSliceSize, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, what);

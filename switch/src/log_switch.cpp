@@ -55,7 +55,7 @@ bool write_all(const char* data, size_t length) {
     return true;
 }
 // Writer thread. Wakes when 16 KiB are queued, a flush is requested, or after 100 ms; writes the filled
-// buffer; every 2 s appends a LOGIO line with its own write/fsync cost; fsyncs at most once a second
+// buffer; every 2 s (Extra logging) or 60 s (default) appends a LOGIO line with its own write/fsync cost; fsyncs at most once a second
 // unless a flush asked for it.
 void* writer(void*) {
 #if defined(__SWITCH__)
@@ -96,7 +96,9 @@ void* writer(void*) {
             dirty = true;
         }
         auto now = now_ns();
-        if (lost || now - lastReport >= 2000000000 || stop) {
+        // The LOGIO cadence follows the Extra logging setting; records lost to a full buffer are always reported.
+        const uint64_t reportEvery = sfa_log_extra() ? 2000000000ull : 60000000000ull;
+        if (lost || now - lastReport >= reportEvery || stop) {
             char line[256];
             const int n = std::snprintf(
                 line, sizeof(line),
@@ -128,6 +130,19 @@ void* writer(void*) {
 }
 } // namespace
 
+// Extra logging flag (log_switch.h). Off until main_sfa.cpp reads switch_menu.ini.
+extern "C" {
+int sfa_log_extra_on = 0;
+}
+extern "C" void sfa_log_set_extra(int on) {
+    on = on != 0;
+    if (__atomic_exchange_n(&sfa_log_extra_on, on, __ATOMIC_RELAXED) != on) {
+        char line[64];
+        const int n = std::snprintf(line, sizeof(line), "[sfa-nx] extra logging %s\n", on ? "on" : "off");
+        if (n > 0)
+            melee_nx_log_write(line, size_t(n));
+    }
+}
 extern "C" double melee_nx_log_now_ms(void) {
     pthread_once(&clockOnce, init_clock);
     return (now_ns() - clockStart) / 1e6;
@@ -167,7 +182,7 @@ int dev_fstat(struct _reent*, void*, struct stat* st) {
 devoptab_t g_logDevice;
 } // namespace
 // Registers the sfalog: device, opens it and dup2s it over stdout and stderr. The writer thread then
-// writes to logFd (the stdout-NNN.log file). Returns 0 if any step fails, and main falls back to
+// writes to logFd (logs/log.txt). Returns 0 if any step fails, and main falls back to
 // pointing stdout straight at the file.
 extern "C" int melee_nx_log_capture_stdio(int logFd) {
     std::memset(&g_logDevice, 0, sizeof(g_logDevice));

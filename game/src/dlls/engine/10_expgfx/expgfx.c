@@ -3754,7 +3754,9 @@ void drawGlow(uintptr_t slotPoolBase, int poolIndex)
                 {
                     scaleFactor = scaleSize;
                 }
-#ifdef __SWITCH__
+// SFA-NX: off by default (it scanned every particle quad and wrote ~15k log lines a session); build
+// with -DSFA_NX_EXPGFX_TRACE to bring it back.
+#if defined(__SWITCH__) && defined(SFA_NX_EXPGFX_TRACE)
                 {
                     // Diagnostic (starburst fire): log particle quads whose corners reach far from the centre.
                     static int sBigQuadLogs;

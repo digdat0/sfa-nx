@@ -20,6 +20,7 @@
 
 #include <array>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <ranges>
@@ -235,6 +236,26 @@ FramePacket& current_frame_packet() { return g_recorder.frame(); }
 
 RenderPassList& current_render_passes() { return g_recorder.passes(); }
 
+// SFA-NX: recycled render pass command lists. Each pass reserves up to 2048 commands, and the whole frame
+// packet used to be freed at the end of every frame (frame.cpp) and allocated again by the next: the
+// largest steady heap churn on Switch. The render worker hands the cleared lists back here at the end of
+// a frame (recycle_command_lists) and new passes take one before reserving.
+std::mutex g_spareCommandListsMutex;
+std::vector<CommandList> g_spareCommandLists; // guarded by g_spareCommandListsMutex
+constexpr size_t MaxSpareCommandLists = 64;   // about two frames of passes
+
+// Gives `list` a recycled buffer when it has none yet.
+void adopt_spare_commands(CommandList& list) {
+  if (list.capacity() != 0) {
+    return;
+  }
+  std::lock_guard lock{g_spareCommandListsMutex};
+  if (!g_spareCommandLists.empty()) {
+    list.swap(g_spareCommandLists.back());
+    g_spareCommandLists.pop_back();
+  }
+}
+
 StagingHighWater current_high_water(const FramePacket& frame) noexcept {
   return {
       .verts = static_cast<uint32_t>(frame.verts.size()),
@@ -259,9 +280,10 @@ FrameOp capture_frame_op(FramePacket& frame, FrameOpType type, uint32_t index) {
           type == FrameOpType::EncoderTask && index < frame.encoderTasks.size() ? &frame.encoderTasks[index] : nullptr,
       .highWater = current_high_water(frame),
   };
-  op.textureUploads.reserve(op.highWater.textureUploadCount);
-  for (size_t i = 0; i < op.highWater.textureUploadCount; ++i) {
-    op.textureUploads.push_back(&frame.textureUploads[i]);
+  // SFA-NX: the uploads since the previous op only (FrameOp::newTextureUploads)
+  const size_t firstNew = frame.ops.empty() ? 0 : frame.ops.back().highWater.textureUploadCount;
+  for (size_t i = firstNew; i < op.highWater.textureUploadCount; ++i) {
+    op.newTextureUploads.push_back(&frame.textureUploads[i]);
   }
   return op;
 }
@@ -447,6 +469,7 @@ void resume_efb_pass_loading(const RenderPass& prevPass) {
     newPass.colorAttachments[i].loadOp = wgpu::LoadOp::Undefined;
     newPass.colorAttachments[i].clear = false;
   }
+  adopt_spare_commands(newPass.commands); // SFA-NX: recycled buffer (reserve is then a no-op)
   newPass.commands.reserve(2048);
   current_render_passes().emplace_back(std::move(newPass));
   ++g_recorder.currentRenderPass;
@@ -506,6 +529,7 @@ void start_offscreen(uint32_t width, uint32_t height) {
       .hasStencil = false,
   };
   set_single_color_target(newPass, g_recorder.offscreenColor.format, {width, height}, g_recorder.offscreenColor.view);
+  adopt_spare_commands(newPass.commands); // SFA-NX: recycled buffer
   current_render_passes().emplace_back(std::move(newPass));
   ++g_recorder.currentRenderPass;
   g_recorder.inOffscreen = true;
@@ -527,6 +551,7 @@ void restore_efb() {
   } else {
     auto& pass = current_render_passes().emplace_back();
     pass.label = pass_label("EFB");
+    adopt_spare_commands(pass.commands); // SFA-NX: recycled buffer
     set_efb_targets(pass);
     for (uint32_t i = 0; i < pass.colorAttachmentCount; ++i) {
       pass.colorAttachments[i].clear = false;
@@ -547,13 +572,14 @@ void enqueue_op(FramePacket& frame, uint32_t opIndex) {
   if (opIndex >= frame.ops.size() || g_recorder.suppressRenderWorker) {
     return;
   }
-  auto op = frame.ops[opIndex];
-  render_worker::enqueue_encode_pass(frame.frameId, opIndex, [packet = &frame, op = std::move(op)] {
-    if (op.renderPass == nullptr && op.textureCopy == nullptr && op.encoderTask == nullptr) {
-      return;
-    }
-    encode_op(packet->encoder, *packet, op);
-  });
+  // SFA-NX: the closure holds a pointer to the op instead of a copy. std::deque::emplace_back keeps
+  // references to existing elements valid and ops are not changed once queued, so the worker reads the
+  // same data; two pointers fit std::function's inline buffer, so queuing a pass no longer allocates.
+  // Every op is encoded, even one with nothing to draw (encode_op skips the null parts): its staging
+  // copies carry texture uploads the next op's delta no longer repeats.
+  const FrameOp* op = &frame.ops[opIndex];
+  render_worker::enqueue_encode_pass(frame.frameId, opIndex,
+                                     [packet = &frame, op] { encode_op(packet->encoder, *packet, *op); });
 }
 
 void enqueue_pass(FramePacket& frame, uint32_t passIndex) {
@@ -565,6 +591,22 @@ void enqueue_pass(FramePacket& frame, uint32_t passIndex) {
 } // namespace
 
 namespace detail {
+
+// SFA-NX: called by the render worker when a frame's packet is done (frame.cpp, before it is reset):
+// keeps the passes' command buffers for the next frames' passes (adopt_spare_commands).
+void recycle_command_lists(FramePacket& packet) {
+  std::lock_guard lock{g_spareCommandListsMutex};
+  if (g_spareCommandLists.capacity() == 0) {
+    g_spareCommandLists.reserve(MaxSpareCommandLists);
+  }
+  for (auto& pass : packet.renderPasses) {
+    if (pass.commands.capacity() == 0 || g_spareCommandLists.size() >= MaxSpareCommandLists) {
+      continue;
+    }
+    pass.commands.clear();
+    g_spareCommandLists.emplace_back(std::move(pass.commands));
+  }
+}
 
 void begin_recording(FramePacket& packet, size_t frameSlot) {
   CHECK(!g_recorder.active(), "A recording session is already active");
@@ -580,6 +622,7 @@ void begin_recording(FramePacket& packet, size_t frameSlot) {
 
   current_render_passes().emplace_back();
   auto& pass = current_render_passes()[0];
+  adopt_spare_commands(pass.commands); // SFA-NX: recycled buffer
   pass.label = pass_label("EFB");
   set_efb_targets(pass);
   pass.colorAttachments[SceneColorAttachmentIndex].clearValue = gx::g_gxState.clearColor;
@@ -765,6 +808,7 @@ void begin_color_pass(const ColorPassDescriptor& desc) {
   color.loadOp = desc.colorLoadOp;
   color.storeOp = desc.colorStoreOp;
   color.clear = desc.colorLoadOp == wgpu::LoadOp::Clear;
+  adopt_spare_commands(pass.commands); // SFA-NX: recycled buffer
   pass.commands.reserve(128);
   frame.renderPasses.emplace_back(std::move(pass));
   g_recorder.currentRenderPass = static_cast<uint32_t>(frame.renderPasses.size() - 1);
@@ -894,6 +938,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, ClipRect sourceRect
     sceneColor.clear = true;
     sceneColor.clearValue = clearColorValue;
   }
+  adopt_spare_commands(newPass.commands); // SFA-NX: recycled buffer (reserve is then a no-op)
   newPass.commands.reserve(2048);
   current_render_passes().emplace_back(std::move(newPass));
   ++g_recorder.currentRenderPass;

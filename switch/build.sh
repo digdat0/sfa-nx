@@ -57,6 +57,14 @@ if [ -n "$CLASH" ]; then
   echo "error: game symbols replace libnx/SDL ones (rename them in CMakeLists.txt):"; echo "$CLASH"; exit 1
 fi
 
+# The heap is dlmalloc (switch/src/malloc_switch.c). If any newlib malloc object still links in (some
+# entry point malloc_switch.c does not define), --allow-multiple-definition would hide the clash and two
+# allocators would share one heap: fail instead. __malloc_av_ is newlib's bin array (libc_a-mallocr.o).
+if "$NM" build-switch/SFA-NX.elf | grep -qw "__malloc_av_"; then
+  echo "error: newlib's malloc is linked next to dlmalloc (switch/src/malloc_switch.c misses an entry point)"
+  exit 1
+fi
+
 mkdir -p debug build-switch/sdcard/switch/SFA-NX
 cp build-switch/SFA-NX.elf "debug/SFA-NX-$(date +%H%M).elf"
 cp build-switch/SFA-NX.nro build-switch/sdcard/switch/SFA-NX/

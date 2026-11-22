@@ -20,8 +20,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
+#include <climits>
+#include <cmath>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -473,6 +476,540 @@ bool remove_mipmaps(gfx::ConvertedTexture& texture) noexcept {
   return true;
 }
 
+// SFA-NX: BC1/BC2/BC3 replacements whose size is not a multiple of 4 (e.g. 62x31 in the GameBanana HD pack).
+// WebGPU refuses a compressed texture whose base size is not whole blocks, but the DDS data already holds
+// whole blocks (ceil(w/4) x ceil(h/4) per level), so these are decoded to RGBA8 at their real size instead.
+// They are small, so four times the memory costs little. Other compressed formats are still refused.
+
+// The block kind of a format this can decode (1, 2, 3 for BC1, BC2, BC3), 0 for any other format.
+int bc_kind(wgpu::TextureFormat format) noexcept {
+  switch (format) {
+  case wgpu::TextureFormat::BC1RGBAUnorm:
+  case wgpu::TextureFormat::BC1RGBAUnormSrgb:
+    return 1;
+  case wgpu::TextureFormat::BC2RGBAUnorm:
+  case wgpu::TextureFormat::BC2RGBAUnormSrgb:
+    return 2;
+  case wgpu::TextureFormat::BC3RGBAUnorm:
+  case wgpu::TextureFormat::BC3RGBAUnormSrgb:
+    return 3;
+  default:
+    return 0;
+  }
+}
+
+// An RGB565 colour as 8-bit RGB (bits repeated into the low bits) with alpha 255.
+void expand_565(uint16_t c, uint8_t out[4]) noexcept {
+  const uint8_t r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
+  out[0] = uint8_t(r << 3 | r >> 2);
+  out[1] = uint8_t(g << 2 | g >> 4);
+  out[2] = uint8_t(b << 3 | b >> 2);
+  out[3] = 255;
+}
+
+// One 4x4 block to 16 RGBA8 texels in row order (the D3D BC1-3 rules: BC1's 3-colour mode with transparent
+// black when c0 <= c1; BC2/BC3 colour always 4-colour; BC2 4-bit alpha; BC3 interpolated 8- or 6-step alpha).
+void decode_bc_block(const uint8_t* block, int kind, uint8_t out[16][4]) noexcept {
+  const uint8_t* color = kind == 1 ? block : block + 8;
+  const uint16_t c0 = uint16_t(color[0] | color[1] << 8);
+  const uint16_t c1 = uint16_t(color[2] | color[3] << 8);
+  const uint32_t indices = uint32_t(color[4]) | uint32_t(color[5]) << 8 | uint32_t(color[6]) << 16 |
+                           uint32_t(color[7]) << 24;
+  const bool fourColour = kind != 1 || c0 > c1;
+  uint8_t pal[4][4];
+  expand_565(c0, pal[0]);
+  expand_565(c1, pal[1]);
+  for (int ch = 0; ch < 3; ++ch) {
+    if (fourColour) {
+      pal[2][ch] = uint8_t((2 * pal[0][ch] + pal[1][ch]) / 3);
+      pal[3][ch] = uint8_t((pal[0][ch] + 2 * pal[1][ch]) / 3);
+    } else {
+      pal[2][ch] = uint8_t((pal[0][ch] + pal[1][ch]) / 2);
+      pal[3][ch] = 0;
+    }
+  }
+  pal[2][3] = 255;
+  pal[3][3] = fourColour ? 255 : 0;
+  for (int i = 0; i < 16; ++i) {
+    std::memcpy(out[i], pal[(indices >> (2 * i)) & 3], 4);
+  }
+  if (kind == 2) {
+    for (int i = 0; i < 16; ++i) {
+      const uint8_t nibble = (block[i / 2] >> ((i & 1) * 4)) & 15;
+      out[i][3] = uint8_t(nibble * 17);
+    }
+  } else if (kind == 3) {
+    const uint32_t a0 = block[0], a1 = block[1];
+    uint8_t alpha[8] = {uint8_t(a0), uint8_t(a1)};
+    if (a0 > a1) {
+      for (uint32_t k = 1; k < 7; ++k)
+        alpha[k + 1] = uint8_t(((7 - k) * a0 + k * a1) / 7);
+    } else {
+      for (uint32_t k = 1; k < 5; ++k)
+        alpha[k + 1] = uint8_t(((5 - k) * a0 + k * a1) / 5);
+      alpha[6] = 0;
+      alpha[7] = 255;
+    }
+    uint64_t bits = 0;
+    for (int b = 0; b < 6; ++b)
+      bits |= uint64_t(block[2 + b]) << (8 * b);
+    for (int i = 0; i < 16; ++i)
+      out[i][3] = alpha[(bits >> (3 * i)) & 7];
+  }
+}
+
+// Decodes a BC1-3 texture (every level it holds) to RGBA8 (sRGB kept). False for other formats or data
+// shorter than its levels need; the texture is then unchanged.
+bool decode_bc_to_rgba8(gfx::ConvertedTexture& tex) noexcept {
+  const int kind = bc_kind(tex.format);
+  if (kind == 0 || tex.width == 0 || tex.height == 0 || tex.mips == 0) {
+    return false;
+  }
+  const uint32_t blockBytes = kind == 1 ? 8 : 16;
+  const uint64_t srcSize = gfx::calc_texture_size(tex.format, tex.width, tex.height, tex.mips);
+  if (srcSize == 0 || srcSize > tex.data.size()) {
+    return false;
+  }
+  uint64_t dstSize = 0;
+  for (uint32_t mip = 0; mip < tex.mips; ++mip) {
+    dstSize += uint64_t(std::max(tex.width >> mip, 1u)) * std::max(tex.height >> mip, 1u) * 4;
+  }
+  ByteBuffer out{dstSize};
+  const uint8_t* src = tex.data.data();
+  uint8_t* dst = out.data();
+  for (uint32_t mip = 0; mip < tex.mips; ++mip) {
+    const uint32_t w = std::max(tex.width >> mip, 1u), h = std::max(tex.height >> mip, 1u);
+    for (uint32_t by = 0; by < h; by += 4) {
+      for (uint32_t bx = 0; bx < w; bx += 4) {
+        uint8_t texels[16][4];
+        decode_bc_block(src, kind, texels);
+        src += blockBytes;
+        // Only the texels inside the level: the block's padding beyond w x h is dropped.
+        for (uint32_t y = 0; y < 4 && by + y < h; ++y)
+          for (uint32_t x = 0; x < 4 && bx + x < w; ++x)
+            std::memcpy(dst + ((by + y) * size_t(w) + bx + x) * 4, texels[y * 4 + x], 4);
+      }
+    }
+    dst += size_t(w) * h * 4;
+  }
+  const bool srgb = tex.format == wgpu::TextureFormat::BC1RGBAUnormSrgb ||
+                    tex.format == wgpu::TextureFormat::BC2RGBAUnormSrgb ||
+                    tex.format == wgpu::TextureFormat::BC3RGBAUnormSrgb;
+  tex.format = srgb ? wgpu::TextureFormat::RGBA8UnormSrgb : wgpu::TextureFormat::RGBA8Unorm;
+  tex.data = std::move(out);
+  return true;
+}
+
+// ---- SFA-NX: mipmaps for replacements that ship without them.
+// 2716 of the GameBanana pack's 4029 DDS files have a single level (1024x576, 1024x528, 256x256, ...), so
+// every minified draw sampled the full-size level: shimmering at a distance and the costliest draws of
+// docked 1080p (a 1024x1024 texture on a far wall reads texels spread over the whole image). The missing
+// levels are made on the texture worker at load: level 0 is kept as the file has it, each lower level is
+// a 2x2 box filter of the one above (colour weighted by alpha, so transparent texels' colour does not
+// bleed into edges) and is encoded back to the file's BC1/BC3 format. Alpha-tested textures (foliage,
+// fences) keep their level 0 coverage at alpha 128 in every level, so they do not thin out in the
+// distance. switch_menu.ini hd_mips=0 turns it off (read once).
+
+// An RGBA8 image for mip generation.
+struct MipImage {
+  uint32_t width = 0, height = 0;
+  std::vector<uint8_t> rgba;
+};
+
+// The next level of `src`: half its size (at least 1), each texel the alpha-weighted average of up to
+// 2x2 texels (an odd last row or column is dropped, as the GPU's level sizes floor).
+MipImage downsample_rgba8(const MipImage& src) {
+  MipImage dst;
+  dst.width = std::max(src.width >> 1, 1u);
+  dst.height = std::max(src.height >> 1, 1u);
+  dst.rgba.resize(size_t(dst.width) * dst.height * 4);
+  for (uint32_t y = 0; y < dst.height; ++y) {
+    const uint32_t y0 = std::min(y * 2, src.height - 1), y1 = std::min(y * 2 + 1, src.height - 1);
+    for (uint32_t x = 0; x < dst.width; ++x) {
+      const uint32_t x0 = std::min(x * 2, src.width - 1), x1 = std::min(x * 2 + 1, src.width - 1);
+      const uint8_t* p[4] = {&src.rgba[(size_t(y0) * src.width + x0) * 4], &src.rgba[(size_t(y0) * src.width + x1) * 4],
+                             &src.rgba[(size_t(y1) * src.width + x0) * 4], &src.rgba[(size_t(y1) * src.width + x1) * 4]};
+      uint32_t sumA = 0;
+      uint32_t sumC[3] = {}, sumCA[3] = {};
+      for (const uint8_t* t : p) {
+        sumA += t[3];
+        for (int c = 0; c < 3; ++c) {
+          sumC[c] += t[c];
+          sumCA[c] += uint32_t(t[c]) * t[3];
+        }
+      }
+      uint8_t* o = &dst.rgba[(size_t(y) * dst.width + x) * 4];
+      for (int c = 0; c < 3; ++c) {
+        // Fully transparent texels: plain average (their colour is still what a blend would show).
+        o[c] = uint8_t(sumA > 0 ? (sumCA[c] + sumA / 2) / sumA : (sumC[c] + 2) / 4);
+      }
+      o[3] = uint8_t((sumA + 2) / 4);
+    }
+  }
+  return dst;
+}
+
+// Texels whose alpha, multiplied by `scale`, reaches the alpha-test threshold (128).
+size_t alpha_coverage(const std::vector<uint8_t>& rgba, float scale) {
+  size_t n = 0;
+  for (size_t i = 3; i < rgba.size(); i += 4) {
+    n += float(rgba[i]) * scale >= 127.5f;
+  }
+  return n;
+}
+
+// Scales a level's alpha so the share of texels at or above 128 matches level 0's (`fraction`): binary
+// search over the scale, as in Castano's "coverage-preserving mipmaps". The scale stays within 0.5-4.
+void preserve_alpha_coverage(std::vector<uint8_t>& rgba, double fraction) {
+  const size_t texels = rgba.size() / 4;
+  const double target = fraction * double(texels);
+  float lo = 0.5f, hi = 4.f, best = 1.f;
+  double bestErr = std::abs(double(alpha_coverage(rgba, 1.f)) - target);
+  for (int i = 0; i < 12; ++i) {
+    const float mid = (lo + hi) * 0.5f;
+    const double n = double(alpha_coverage(rgba, mid));
+    if (std::abs(n - target) < bestErr) {
+      bestErr = std::abs(n - target);
+      best = mid;
+    }
+    if (n < target) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  if (best == 1.f) {
+    return;
+  }
+  for (size_t i = 3; i < rgba.size(); i += 4) {
+    rgba[i] = uint8_t(std::min(255.f, float(rgba[i]) * best + 0.5f));
+  }
+}
+
+// RGB888 to RGB565 with rounding.
+uint16_t pack_565(const float c[3]) noexcept {
+  const auto q = [](float v, int max) { return uint32_t(std::clamp(v, 0.f, 255.f) * float(max) / 255.f + 0.5f); };
+  return uint16_t(q(c[0], 31) << 11 | q(c[1], 63) << 5 | q(c[2], 31));
+}
+
+// One BC1 colour block (also BC3's colour half) from 16 RGBA8 texels in row order. The endpoints lie on
+// the block's principal colour axis (power iteration on the covariance) through its mean, at the
+// extreme projections, refitted once by least squares; each texel takes the palette entry its
+// projection onto the endpoint line is nearest to. `punch`: BC1's 3-colour mode, texels below alpha 128 get index 3 (transparent black).
+void encode_bc_colour(const uint8_t px[16][4], bool punch, uint8_t out[8]) noexcept {
+  const auto skip = [&](int i) { return punch && px[i][3] < 128; };
+  float mean[3] = {};
+  int n = 0;
+  for (int i = 0; i < 16; ++i) {
+    if (skip(i)) {
+      continue;
+    }
+    for (int c = 0; c < 3; ++c) {
+      mean[c] += px[i][c];
+    }
+    ++n;
+  }
+  if (n == 0) {
+    // All transparent: c0 = c1 = 0 (3-colour mode), every index 3.
+    std::memset(out, 0, 4);
+    std::memset(out + 4, 0xFF, 4);
+    return;
+  }
+  for (float& m : mean) {
+    m /= float(n);
+  }
+  float cov[6] = {}; // rr rg rb gg gb bb
+  for (int i = 0; i < 16; ++i) {
+    if (skip(i)) {
+      continue;
+    }
+    const float d[3] = {px[i][0] - mean[0], px[i][1] - mean[1], px[i][2] - mean[2]};
+    cov[0] += d[0] * d[0];
+    cov[1] += d[0] * d[1];
+    cov[2] += d[0] * d[2];
+    cov[3] += d[1] * d[1];
+    cov[4] += d[1] * d[2];
+    cov[5] += d[2] * d[2];
+  }
+  float axis[3] = {1.f, 1.f, 1.f};
+  for (int it = 0; it < 4; ++it) {
+    const float v[3] = {cov[0] * axis[0] + cov[1] * axis[1] + cov[2] * axis[2],
+                        cov[1] * axis[0] + cov[3] * axis[1] + cov[4] * axis[2],
+                        cov[2] * axis[0] + cov[4] * axis[1] + cov[5] * axis[2]};
+    const float len = std::max({std::abs(v[0]), std::abs(v[1]), std::abs(v[2])});
+    if (len < 1e-6f) {
+      break; // a flat block: the endpoints collapse onto the mean whatever the axis
+    }
+    for (int c = 0; c < 3; ++c) {
+      axis[c] = v[c] / len;
+    }
+  }
+  float tmin = 1e9f, tmax = -1e9f;
+  for (int i = 0; i < 16; ++i) {
+    if (skip(i)) {
+      continue;
+    }
+    const float t = (px[i][0] - mean[0]) * axis[0] + (px[i][1] - mean[1]) * axis[1] + (px[i][2] - mean[2]) * axis[2];
+    tmin = std::min(tmin, t);
+    tmax = std::max(tmax, t);
+  }
+  float e0[3], e1[3];
+  for (int c = 0; c < 3; ++c) {
+    e0[c] = mean[c] + axis[c] * tmax;
+    e1[c] = mean[c] + axis[c] * tmin;
+  }
+  // Indices for a pair of 565 endpoints, by projecting each texel onto the line between the decoded
+  // endpoints (the palette's entries lie on it), and the squared error that gives. 4-colour mode orders
+  // the palette c0, 2/3 c0 + 1/3 c1, 1/3 c0 + 2/3 c1, c1 (indices 0, 2, 3, 1); 3-colour mode c0, the
+  // midpoint, c1 (0, 2, 1).
+  const auto assign = [&](uint16_t a0, uint16_t a1, uint32_t& indices) -> float {
+    uint8_t p0[4], p1[4];
+    expand_565(a0, p0);
+    expand_565(a1, p1);
+    const float d[3] = {float(p1[0]) - p0[0], float(p1[1]) - p0[1], float(p1[2]) - p0[2]};
+    const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    const int steps = punch ? 2 : 3;
+    static constexpr uint32_t kOrder4[4] = {0, 2, 3, 1}, kOrder3[3] = {0, 2, 1};
+    indices = 0;
+    float err = 0.f;
+    for (int i = 0; i < 16; ++i) {
+      if (skip(i)) {
+        indices |= 3u << (2 * i);
+        continue;
+      }
+      const float q[3] = {float(px[i][0]) - p0[0], float(px[i][1]) - p0[1], float(px[i][2]) - p0[2]};
+      int k = 0;
+      if (dd > 0.f) {
+        const float t = (q[0] * d[0] + q[1] * d[1] + q[2] * d[2]) / dd;
+        k = std::clamp(int(t * float(steps) + 0.5f), 0, steps);
+      }
+      indices |= (punch ? kOrder3[k] : kOrder4[k]) << (2 * i);
+      const float w = float(k) / float(steps);
+      for (int c = 0; c < 3; ++c) {
+        const float e = q[c] - w * d[c];
+        err += e * e;
+      }
+    }
+    return err;
+  };
+  // Orders the endpoints for the mode (BC1's 4-colour mode needs c0 > c1, its 3-colour mode c0 <= c1;
+  // BC3 colour is always 4-colour) and assigns indices. Equal endpoints: every index 0 (that colour in
+  // either mode), or 3 for transparent texels.
+  const auto encode = [&](uint16_t a0, uint16_t a1, uint32_t& indices) -> float {
+    if (punch ? a0 > a1 : a0 < a1) {
+      std::swap(a0, a1);
+    }
+    return assign(a0, a1, indices);
+  };
+  uint16_t c0 = pack_565(e0), c1 = pack_565(e1);
+  if (punch ? c0 > c1 : c0 < c1) {
+    std::swap(c0, c1);
+  }
+  uint32_t indices = 0;
+  float err = encode(c0, c1, indices);
+  // One least-squares refit: with each texel's weight between the endpoints fixed by its index, the
+  // endpoints that minimise the error (a 2x2 system per channel); kept if it lowers the error.
+  if (c0 != c1) {
+    float a = 0.f, b = 0.f, c = 0.f, x0[3] = {}, x1[3] = {};
+    for (int i = 0; i < 16; ++i) {
+      if (skip(i)) {
+        continue;
+      }
+      const uint32_t idx = (indices >> (2 * i)) & 3;
+      // the index's position along c0 -> c1
+      const float w = punch ? (idx == 0 ? 0.f : idx == 1 ? 1.f : 0.5f)
+                            : (idx == 0 ? 0.f : idx == 1 ? 1.f : idx == 2 ? 1.f / 3.f : 2.f / 3.f);
+      a += (1.f - w) * (1.f - w);
+      b += w * w;
+      c += w * (1.f - w);
+      for (int ch = 0; ch < 3; ++ch) {
+        x0[ch] += (1.f - w) * px[i][ch];
+        x1[ch] += w * px[i][ch];
+      }
+    }
+    const float det = a * b - c * c;
+    if (std::abs(det) > 1e-4f) {
+      float r0[3], r1[3];
+      for (int ch = 0; ch < 3; ++ch) {
+        r0[ch] = (b * x0[ch] - c * x1[ch]) / det;
+        r1[ch] = (a * x1[ch] - c * x0[ch]) / det;
+      }
+      uint32_t refined = 0;
+      uint16_t n0 = pack_565(r0), n1 = pack_565(r1);
+      if (punch ? n0 > n1 : n0 < n1) {
+        std::swap(n0, n1);
+      }
+      if (n0 != n1) {
+        const float refinedErr = encode(n0, n1, refined);
+        if (refinedErr < err) {
+          c0 = n0;
+          c1 = n1;
+          indices = refined;
+          err = refinedErr;
+        }
+      }
+    }
+  }
+  if (c0 == c1) {
+    // (see encode: index 0, or 3 for transparent texels)
+    uint32_t flat = 0;
+    for (int i = 0; i < 16; ++i) {
+      flat |= (skip(i) ? 3u : 0u) << (2 * i);
+    }
+    indices = flat;
+  }
+  out[0] = uint8_t(c0);
+  out[1] = uint8_t(c0 >> 8);
+  out[2] = uint8_t(c1);
+  out[3] = uint8_t(c1 >> 8);
+  for (int b4 = 0; b4 < 4; ++b4) {
+    out[4 + b4] = uint8_t(indices >> (8 * b4));
+  }
+}
+
+// BC3's alpha half: the block's alpha range in 8-step mode (a0 > a1), each texel the nearest step.
+void encode_bc3_alpha(const uint8_t px[16][4], uint8_t out[8]) noexcept {
+  uint8_t amin = 255, amax = 0;
+  for (int i = 0; i < 16; ++i) {
+    amin = std::min(amin, px[i][3]);
+    amax = std::max(amax, px[i][3]);
+  }
+  out[0] = amax;
+  out[1] = amin;
+  uint64_t bits = 0;
+  if (amax != amin) {
+    uint8_t steps[8] = {amax, amin};
+    for (uint32_t k = 1; k < 7; ++k) {
+      steps[k + 1] = uint8_t(((7 - k) * amax + k * amin) / 7);
+    }
+    for (int i = 0; i < 16; ++i) {
+      uint64_t idx = 0;
+      int bestErr = 256;
+      for (int k = 0; k < 8; ++k) {
+        const int err = std::abs(int(px[i][3]) - steps[k]);
+        if (err < bestErr) {
+          bestErr = err;
+          idx = uint64_t(k);
+        }
+      }
+      bits |= idx << (3 * i);
+    }
+  }
+  for (int b = 0; b < 6; ++b) {
+    out[2 + b] = uint8_t(bits >> (8 * b));
+  }
+}
+
+// Appends one level, encoded as BC1 (kind 1) or BC3 (kind 3), to `dst`. Blocks past the level's edge
+// repeat its last row and column.
+void encode_bc_level(const MipImage& img, int kind, std::vector<uint8_t>& dst) {
+  for (uint32_t by = 0; by < img.height; by += 4) {
+    for (uint32_t bx = 0; bx < img.width; bx += 4) {
+      uint8_t px[16][4];
+      bool transparent = false;
+      for (uint32_t y = 0; y < 4; ++y) {
+        for (uint32_t x = 0; x < 4; ++x) {
+          const uint32_t sx = std::min(bx + x, img.width - 1), sy = std::min(by + y, img.height - 1);
+          std::memcpy(px[y * 4 + x], &img.rgba[(size_t(sy) * img.width + sx) * 4], 4);
+          transparent |= px[y * 4 + x][3] < 128;
+        }
+      }
+      uint8_t block[16];
+      if (kind == 1) {
+        encode_bc_colour(px, transparent, block);
+        dst.insert(dst.end(), block, block + 8);
+      } else {
+        encode_bc3_alpha(px, block);
+        encode_bc_colour(px, false, block + 8);
+        dst.insert(dst.end(), block, block + 16);
+      }
+    }
+  }
+}
+
+// Whether hd_mips is on (switch_menu.ini, default on; read once).
+bool hd_mips_enabled() noexcept {
+#if defined(__SWITCH__)
+  static const bool on = sfaSwitchMenuIniValue == nullptr || sfaSwitchMenuIniValue("hd_mips", 1) != 0;
+  return on;
+#else
+  return true;
+#endif
+}
+
+// Gives a single-level BC1, BC3 or RGBA8 replacement of 64 px or more its full mip chain (see above).
+// False (texture unchanged) for other formats, textures that already have levels, small ones, or data
+// shorter than level 0 needs.
+bool generate_mips(gfx::ConvertedTexture& tex) noexcept {
+  if (!hd_mips_enabled() || tex.mips != 1 || std::max(tex.width, tex.height) < 64) {
+    return false;
+  }
+  const int kind = bc_kind(tex.format);
+  const bool rgba8 = tex.format == wgpu::TextureFormat::RGBA8Unorm || tex.format == wgpu::TextureFormat::RGBA8UnormSrgb;
+  if (kind != 1 && kind != 3 && !rgba8) {
+    return false;
+  }
+  const uint64_t level0 = gfx::calc_texture_size(tex.format, tex.width, tex.height, 1);
+  if (level0 == 0 || level0 > tex.data.size()) {
+    return false;
+  }
+  // Level 0 as RGBA8.
+  MipImage img;
+  img.width = tex.width;
+  img.height = tex.height;
+  img.rgba.resize(size_t(tex.width) * tex.height * 4);
+  if (rgba8) {
+    std::memcpy(img.rgba.data(), tex.data.data(), img.rgba.size());
+  } else {
+    const uint8_t* src = tex.data.data();
+    const uint32_t blockBytes = kind == 1 ? 8 : 16;
+    for (uint32_t by = 0; by < tex.height; by += 4) {
+      for (uint32_t bx = 0; bx < tex.width; bx += 4) {
+        uint8_t texels[16][4];
+        decode_bc_block(src, kind, texels);
+        src += blockBytes;
+        for (uint32_t y = 0; y < 4 && by + y < tex.height; ++y)
+          for (uint32_t x = 0; x < 4 && bx + x < tex.width; ++x)
+            std::memcpy(&img.rgba[((by + y) * size_t(tex.width) + bx + x) * 4], texels[y * 4 + x], 4);
+      }
+    }
+  }
+  // Alpha-test coverage of level 0, kept in the levels below for cut-out textures: some transparency and
+  // under 10% of texels between alpha 16 and 240. Soft alpha (smoke, glows) keeps the plain box filter.
+  size_t transparentTexels = 0, softTexels = 0;
+  for (size_t i = 3; i < img.rgba.size(); i += 4) {
+    transparentTexels += img.rgba[i] < 255;
+    softTexels += img.rgba[i] > 16 && img.rgba[i] < 240;
+  }
+  const size_t texelCount = img.rgba.size() / 4;
+  const bool cutout = transparentTexels > 0 && softTexels * 10 < texelCount;
+  const double coverage = cutout ? double(alpha_coverage(img.rgba, 1.f)) / double(texelCount) : 1.0;
+
+  std::vector<uint8_t> out(tex.data.data(), tex.data.data() + level0);
+  uint32_t mips = 1;
+  while (img.width > 1 || img.height > 1) {
+    img = downsample_rgba8(img); // from the unscaled level above
+    MipImage level = img;
+    if (cutout) {
+      preserve_alpha_coverage(level.rgba, coverage);
+    }
+    if (rgba8) {
+      out.insert(out.end(), level.rgba.begin(), level.rgba.end());
+    } else {
+      encode_bc_level(level, kind, out);
+    }
+    ++mips;
+  }
+  if (gfx::calc_texture_size(tex.format, tex.width, tex.height, mips) != out.size()) {
+    return false; // (the sizes disagree: keep the single level)
+  }
+  ByteBuffer data{out.size()};
+  std::memcpy(data.data(), out.data(), out.size());
+  tex.data = std::move(data);
+  tex.mips = mips;
+  return true;
+}
+
 constexpr bool is_unsupported_texture_format(wgpu::TextureFormat format) {
   switch (format) {
   case wgpu::TextureFormat::BC1RGBAUnorm:
@@ -643,6 +1180,15 @@ std::optional<gfx::ConvertedTexture> load_encoded_replacement(Source&& src) noex
              static_cast<uint32_t>(base->format));
     return std::nullopt;
   }
+  // SFA-NX: a BC1-3 texture whose size is not whole blocks is decoded to RGBA8 (decode_bc_to_rgba8 above);
+  // any other unaligned compressed texture is still refused with the warning.
+  const wgpu::TextureFormat fileFormat = base->format;
+  bool decoded = false;
+  if (!gfx::is_block_aligned(base->format, base->width, base->height) && decode_bc_to_rgba8(*base)) {
+    decoded = true;
+    Log.info("texture_replacement: {} is {}x{}, not whole 4x4 blocks: decoded to RGBA8", src.name(), base->width,
+             base->height);
+  }
   if (!validate_texture_size(base->format, base->width, base->height, src.name())) {
     return std::nullopt;
   }
@@ -658,6 +1204,10 @@ std::optional<gfx::ConvertedTexture> load_encoded_replacement(Source&& src) noex
     }
 
     auto lvl = src.load_mip();
+    // SFA-NX: a decoded base's sidecar mips are decoded the same way, so their format matches it
+    if (decoded && lvl.has_value() && lvl->format == fileFormat) {
+      decode_bc_to_rgba8(*lvl);
+    }
     const uint32_t ew = std::max(base->width >> mipLevel, 1u);
     const uint32_t eh = std::max(base->height >> mipLevel, 1u);
     const bool ok = lvl.has_value() && lvl->format == base->format && lvl->width == ew && lvl->height == eh;
@@ -680,6 +1230,22 @@ std::optional<gfx::ConvertedTexture> load_encoded_replacement(Source&& src) noex
   }
 
   if (more.empty()) {
+    // SFA-NX: no levels in the file or beside it: make them (generate_mips above). Counted and timed;
+    // logged every 200 textures.
+    static std::atomic<uint32_t> s_generated{0};
+    static std::atomic<uint64_t> s_generatedUs{0};
+    const auto t0 = std::chrono::steady_clock::now();
+    if (generate_mips(*base)) {
+      const auto us = uint64_t(
+          std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
+      const uint64_t totalUs = s_generatedUs.fetch_add(us) + us;
+      const uint32_t n = s_generated.fetch_add(1) + 1;
+      if (n == 1 || n % 200 == 0) {
+        Log.info("texture_replacement: mipmaps made for {} textures without them, {:.1f} ms each on average "
+                 "(latest {} {}x{}, {} levels)",
+                 n, double(totalUs) / 1000.0 / n, src.name(), base->width, base->height, base->mips);
+      }
+    }
     return base;
   }
 
@@ -800,6 +1366,12 @@ void worker_main(std::stop_token token) {
       if (auto thumbnail = load_thumbnail(job.entry); thumbnail.has_value()) {
         texture = std::move(thumbnail->texture);
         thumbnailIncludesBase = thumbnail->includesBase;
+        // SFA-NX: the preview is the first mip level of 64 px or less, which for a non-power-of-two texture
+        // is often not whole 4x4 blocks (1984x992 gives 62x31) and was refused, so the original texture
+        // showed until the full one loaded. A BC1-3 preview like that is decoded to RGBA8 (it is tiny).
+        if (!gfx::is_block_aligned(texture->format, texture->width, texture->height)) {
+          decode_bc_to_rgba8(*texture);
+        }
       }
     } else if (job.entry.kind == EntryKind::File) {
       texture = load_file_replacement(job.entry);

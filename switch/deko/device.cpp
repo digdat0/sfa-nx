@@ -29,11 +29,22 @@ extern "C" int sfaSwitchMenuIniValue(const char* key, int def) __attribute__((we
 #include "text_vsh_dksh.h"
 
 extern "C" char* fake_heap_end;
-// newlib's mallinfo (libc/stdlib/mallocr.c); its <malloc.h> clashes with <cstdlib> under clang
-struct mallinfo {
-    size_t arena, ordblks, smblks, hblks, hblkhd, usmblks, fsmblks, uordblks, fordblks, keepcost;
+// The heap allocator's statistics (switch/src/malloc_switch.c, dlmalloc 2.8.6): call counts since start,
+// heap sizes, and the most frequent sampled allocation sites since the last call (.elf addresses).
+struct SfaHeapStats {
+    uint64_t mallocCalls, freeCalls;
+    size_t footprint, inUse, freeInside, freeChunks, topFree;
+    uintptr_t topCaller[8];
+    uint32_t topCount[8];
+    uint32_t sampleEvery;
+    // leak finder (malloc_switch.c): callers whose live memory grew most since the first report
+    uintptr_t growCaller[8];
+    int64_t growBytes[8];
+    uint64_t trackedLive;
+    uint32_t trackDropped;
 };
-extern "C" struct mallinfo mallinfo(void);
+extern "C" void sfa_heap_stats(SfaHeapStats* out);
+extern "C" int sfa_log_extra_on;  // switch/src/log_switch.cpp: the - menu's Extra logging
 // the game's host allocation scope (JKRHeap.cpp, native/src/pc/game_hooks/pc_jkr_heap.cpp)
 void JKRPcBeginHostAlloc();              // libnx: the end of the heap malloc grows into (sbrk)
 extern "C" void cos_switch_flush_logs(void);  // backend_present.cpp
@@ -168,6 +179,22 @@ const WindowConfig& window_config() {
 int g_opMode = -1;  // the operation mode the window was last sized for: 1 docked, 0 handheld, -1 not yet
 uint64_t g_windowResizes = 0;
 
+// The - menu's Docked Resolution (switch_menu.ini docked_res): 0 720p (the system scales it to the TV),
+// 1 900p, 2 1080p. Above 720p the docked swapchain is 1920x1080 and Aurora renders at the chosen size
+// (aurora_switch_frame_size at the end of the file). -1 until first read; the menu changes it through
+// aurora_switch_set_docked_res. Atomic: read on the main thread (Aurora's window size) and on the
+// presenting thread (window_wanted).
+std::atomic<int> g_dockedRes{-1};
+int docked_res() {
+    int v = g_dockedRes.load(std::memory_order_relaxed);
+    if (v < 0) {
+        v = sfaSwitchMenuIniValue ? sfaSwitchMenuIniValue("docked_res", 0) : 0;
+        v = v < 0 ? 0 : v > 2 ? 2 : v;
+        g_dockedRes.store(v, std::memory_order_relaxed);
+    }
+    return v;
+}
+
 // the window size for the current operation mode (libnx keeps appletGetOperationMode up to date from
 // AppletMessage_OperationModeChanged in the main thread's appletMainLoop)
 void window_wanted(uint32_t& w, uint32_t& h) {
@@ -182,7 +209,8 @@ void window_wanted(uint32_t& w, uint32_t& h) {
         h = c.h;
         return;
     }
-    const bool big = c.mode == 1 && docked == 1;
+    // 1080p output when docked with COS_DK_DOCKED_1080, or with a Docked Resolution above 720p.
+    const bool big = docked == 1 && (c.mode == 1 || docked_res() > 0);
     w = big ? 1920 : 1280;
     h = big ? 1080 : 720;
 }
@@ -254,9 +282,10 @@ void frame_stats(uint64_t presentNs) {
     const double n = double(g_times.presents);
     const MemoryStats m = memory_stats_take();
     const DescriptorStats d = descriptor_stats();
-    // fordblks: freed memory malloc holds below its break (with heap_never_used_mib, what is still
-    // allocatable); ordblks: the free chunks it is in, whose growth over a session is fragmentation
-    const struct mallinfo heap = mallinfo();
+    // freeInside: freed memory malloc holds below its break (with heap_never_used_mib, what is still
+    // allocatable); freeChunks: the free chunks it is in, whose growth over a session is fragmentation
+    SfaHeapStats heap;
+    sfa_heap_stats(&heap);
     dklog("frames %llu-%llu: %.1f presents/s; per present: frame fence %.2f ms, acquire %.2f ms, record %.2f ms, "
           "submit+present %.2f ms, longest %.2f ms, %.1f submits; command memory max %llu KiB/frame (%llu "
           "overflows), stream max %llu KiB/frame (%llu full); image heap %llu KiB in %llu chunks, blocks %llu KiB, "
@@ -273,7 +302,39 @@ void frame_stats(uint64_t presentNs) {
           (unsigned long long)(m.codeBytes >> 10), d.imagesUsed, d.samplersUsed, (unsigned long long)d.imageWrites,
           (unsigned long long)d.samplerWrites, (unsigned long long)d.samplerEvictions,
           R.width, R.height, (unsigned long long)g_windowResizes, g_debugMessages, heap_never_used_mib(),
-          size_t(heap.fordblks) >> 20, size_t(heap.ordblks));
+          heap.freeInside >> 20, heap.freeChunks);
+    // The allocator line: calls per present (each one takes the heap lock, so the GX, render and game
+    // threads queue on each other's), sizes, and the top allocation sites. Resolve the sites with
+    // aarch64-none-elf-addr2line -f -C -e debug/SFA-NX-HHMM.elf <address> (the build's own .elf).
+    static uint64_t mallocsAtStats = 0, freesAtStats = 0;
+    char sites[8 * 32] = "";
+    size_t used = 0;
+    for (int k = 0; k < 8 && heap.topCount[k] != 0 && used < sizeof(sites); ++k) {
+        // each sample stands for sampleEvery allocations: print the estimated allocations per present
+        used += size_t(snprintf(sites + used, sizeof(sites) - used, " 0x%llx:%.1f",
+                                (unsigned long long)heap.topCaller[k],
+                                double(heap.topCount[k]) * heap.sampleEvery / n));
+    }
+    dklog("heap (dlmalloc): %.0f mallocs, %.0f frees per present; in use %zu MiB, footprint %zu MiB, free "
+          "inside %zu KiB in %zu chunks (top %zu KiB); allocation sites per present:%s",
+          double(heap.mallocCalls - mallocsAtStats) / n, double(heap.freeCalls - freesAtStats) / n,
+          heap.inUse >> 20, heap.footprint >> 20, heap.freeInside >> 10, heap.freeChunks, heap.topFree >> 10,
+          sites);
+    // Leak finder: callers ranked by how much more of their memory is live than at the first report
+    // (estimates from 1-in-64 samples). A caller that climbs report after report is the leak. It samples
+    // only with the - menu's Extra logging on (malloc_switch.c), so the line is printed only then.
+    if (__atomic_load_n(&sfa_log_extra_on, __ATOMIC_RELAXED)) {
+        char grow[8 * 40] = "";
+        used = 0;
+        for (int k = 0; k < 8 && heap.growBytes[k] > 0 && used < sizeof(grow); ++k) {
+            used += size_t(snprintf(grow + used, sizeof(grow) - used, " 0x%llx:+%lldK",
+                                    (unsigned long long)heap.growCaller[k], (long long)(heap.growBytes[k] >> 10)));
+        }
+        dklog("heap live: %llu MiB sampled live (%u samples dropped); growth since first report by caller:%s",
+              (unsigned long long)(heap.trackedLive >> 20), heap.trackDropped, grow);
+    }
+    mallocsAtStats = heap.mallocCalls;
+    freesAtStats = heap.freeCalls;
     static uint64_t entryFlushesAtStats = 0;
     static uint64_t fenceBatchesAtStats = 0;
     dklog("GPFIFO: at most %u entries per kickoff, %llu early flushes (128 entries pending), %llu list splits "
@@ -397,7 +458,7 @@ bool present_acquire(PresentImage* image) {
 
 // Draws the frame's picture into the swapchain image and presents it. `picture` is called three times:
 // stage 0 before the target is bound, 1 to draw, 2 after drawing (the callbacks use only stage 1).
-void frame_present(PictureFn picture, void* user, const PresentImage* acquired) {
+void frame_present(PictureFn picture, void* user, const PresentImage* acquired, bool fullWindow) {
     frame_open();
     const uint64_t frame = R.frame + 1;
     // An image acquired before the lock is presented at the size it was acquired for; a mode change
@@ -425,13 +486,19 @@ void frame_present(PictureFn picture, void* user, const PresentImage* acquired) 
     dkImageViewDefaults(&color, &g_swapImages[slot]);
     dkImageViewDefaults(&depth, &g_depth);
     const DkImageView* colors[] = {&color};
-    dkCmdBufBindRenderTargets(R.cmd, colors, 1, &depth);
+    // SFA-NX: the game's picture (fullWindow) is one full-window draw without depth, so it binds no depth
+    // buffer and skips both clears: two full-window writes a frame (1920x1080 docked). The boot screen and
+    // the test pattern still clear and keep the depth buffer.
+    const bool skipClears = fullWindow && picture && !g_testPattern;
+    dkCmdBufBindRenderTargets(R.cmd, colors, 1, skipClears ? nullptr : &depth);
     static const DkViewportSwizzle kIdentity = {DkSwizzle_PositiveX, DkSwizzle_PositiveY, DkSwizzle_PositiveZ,
                                                 DkSwizzle_PositiveW};
     dkCmdBufSetViewportSwizzles(R.cmd, 0, &kIdentity, 1);  // (the game's passes may have flipped y: C.flipY)
     set_view(0, 0, R.width, R.height);
-    dkCmdBufClearColorFloat(R.cmd, 0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
-    dkCmdBufClearDepthStencil(R.cmd, true, 1.0f, 0xFF, 0);
+    if (!skipClears) {
+        dkCmdBufClearColorFloat(R.cmd, 0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+        dkCmdBufClearDepthStencil(R.cmd, true, 1.0f, 0xFF, 0);
+    }
     if (g_testPattern) {
         pattern_draw();
     } else if (picture) {
@@ -571,7 +638,7 @@ long env_long(const char* name, long def) {
     return end && end != e ? v : def;
 }
 
-// Renderer log line ("[dk] ..." on stderr, which lands in logs/stdout-NNN.log).
+// Renderer log line ("[dk] ..." on stderr, which lands in logs/log.txt).
 void dklog(const char* format, ...) {
     char line[1024];
     va_list args;
@@ -806,4 +873,27 @@ extern "C" void aurora_switch_dk_release_all(void) {
     dkDeviceDestroy(R.device);
     R.device = nullptr;
     dklog("released for restart: %u memory blocks, queue and device", blocks);
+}
+
+// The - menu's Docked Resolution changed (0 720p, 1 900p, 2 1080p): the swapchain follows at the next
+// present (window_wanted) and Aurora's frame at its next event poll (window.cpp on Switch).
+extern "C" void aurora_switch_set_docked_res(int value) {
+    g_dockedRes.store(value < 0 ? 0 : value > 2 ? 2 : value, std::memory_order_relaxed);
+}
+
+// Aurora's window size on Switch (extern/aurora/lib/window.cpp get_window_size): when docked with a Docked
+// Resolution above 720p, the output (Aurora's surface, what it resamples its frame to) is the 1920x1080
+// swapchain and the frame is rendered at 1600x900 or 1920x1080. Returns 0 otherwise, and Aurora keeps
+// the SDL window's 1280x720 as before. Called on the main thread; reads the operation mode without
+// window_wanted's logging (that state belongs to the presenting thread).
+extern "C" int aurora_switch_frame_size(int* outW, int* outH, int* renderW, int* renderH) {
+    const int res = docked_res();
+    if (res == 0 || window_config().mode == 2 || appletGetOperationMode() != AppletOperationMode_Console) {
+        return 0;
+    }
+    *outW = 1920;
+    *outH = 1080;
+    *renderW = res == 1 ? 1600 : 1920;
+    *renderH = res == 1 ? 900 : 1080;
+    return 1;
 }

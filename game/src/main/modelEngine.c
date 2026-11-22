@@ -477,6 +477,7 @@
 #include "PowerPC_EABI_Support/Msl/MSL_C/MSL_Common/printf.h"
 #include "PowerPC_EABI_Support/Msl/MSL_C/MSL_Common/string.h"
 #include "main/hud_visibility.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD aspect correction (the UI draw scope)
 
 s32 gModelEngineHudNumber = -1;
 f32 gModelEngineTimerValue;
@@ -942,11 +943,16 @@ void gameTimerInit(s8 flags, int minutes) {
     }
 }
 
+// SFA-NX: the UI DLL's draw (game HUD, pause and title menus, save screens) is the scope where the widescreen
+// HUD correction applies, centred unless a panel inside picks an edge (port/src/fh_hud_aspect.c)
 void curUiDllDraw(int a, int b, int c, int d) {
+    fhHudFrameTick();
+    fhHudPush(FH_HUD_CENTRE);
     if (gModelEngineCurUiDllRes != NULL) {
         UiDllVTable* callbacks = *gModelEngineCurUiDllRes;
         callbacks->draw(a, b, c);
     }
+    fhHudPop();
 }
 
 void uiDll_runFrameEndAndLoadNext(void) {

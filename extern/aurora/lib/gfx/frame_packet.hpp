@@ -182,7 +182,11 @@ struct FrameOp {
   TextureCopy* textureCopy = nullptr;
   EncoderTask* encoderTask = nullptr;
   StagingHighWater highWater;
-  std::vector<const TextureUpload*> textureUploads;
+  // SFA-NX: only the uploads queued since the previous op (indices highWater.textureUploadCount -
+  // size() .. textureUploadCount). Each op used to copy pointers to every upload of the frame so far:
+  // passes x uploads pointers a frame, vectors of 512-2559 bytes in the heap bins that fragmented on
+  // Switch. Ops are encoded in order, so the deltas add up to the same uploads.
+  std::vector<const TextureUpload*> newTextureUploads;
 };
 
 using RenderPassList = std::deque<RenderPass>;

@@ -4,6 +4,7 @@
 #include "main/textrender.h"
 #include "main/rcp_dolphin.h"
 #include "main/camera.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD correction (text box clip)
 
 char sMapDirectoryNameArwing[] = "Arwing";
 char sMapDirectoryNameBoot[] = "Boot";
@@ -202,7 +203,9 @@ void gameTextRenderStrs(char* str, int boxIdx) {
     if (gameTextDrawFunc != NULL) {
         gxSetScissorRect(0, 0, 0, 0, 0x280, 0x1e0);
     } else if (gGameTextMeasureOnly == 0) {
-        gxSetScissorRect(0, 0, slot->x, slot->y, slot->x + slot->width, slot->y + slot->height);
+        // SFA-NX: the box's clip moves with its text under the widescreen HUD correction (fhHudMapX)
+        gxSetScissorRect(0, 0, (int)fhHudMapX((f32)slot->x), slot->y, (int)(fhHudMapX((f32)(slot->x + slot->width)) + 0.5f),
+                         slot->y + slot->height);
     }
     gGameTextScale = slot->scale;
     for (i = 0; i < count; i++) {

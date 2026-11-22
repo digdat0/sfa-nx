@@ -31,6 +31,9 @@
 #include "system_info.hpp"
 #include "tracy/Tracy.hpp"
 
+// SFA-NX: the − menu's switch_menu.ini values (switch/src/switch_menu.cpp); absent outside the Switch build.
+extern "C" int sfaSwitchMenuIniValue(const char* key, int def) __attribute__((weak));
+
 namespace aurora {
 AuroraConfig g_config;
 uint32_t g_sdlCustomEventsStart;
@@ -322,7 +325,37 @@ void submit_frame(imgui::DrawData imguiDrawData) noexcept {
     }
 
     const bool canPresent = currentTexture && currentView;
-    if (canPresent) {
+#if defined(AURORA_GFX_DEKO3D)
+    // SFA-NX: direct present. switch/deko's kartpad_deko_present already draws the presented texture into
+    // the swapchain image, so when the EFB is exactly the window's size it is handed over as it is and the
+    // "EFB copy render pass" below (a second full-screen copy: 1.2 ms a frame at docked 1080p) is skipped.
+    // The ImGui overlay (FPS counter, profiler) then draws straight into the EFB: every frame's first EFB
+    // pass clears it (begin_recording), so nothing of it is left for the next frame. Not with an RmlUi
+    // picture, or with a 900p EFB in a 1080p window (the deko present scales it, but ImGui's viewport is
+    // the window's). switch_menu.ini direct_present=0 turns it off (read once, at the first present).
+    static const bool s_directPresentAllowed =
+        sfaSwitchMenuIniValue == nullptr || sfaSwitchMenuIniValue("direct_present", 1) != 0;
+    const auto& directSource = webgpu::present_source();
+    const bool directPresent = s_directPresentAllowed && canPresent && !rmlBindGroup && directSource.texture &&
+                               directSource.size.width == webgpu::g_graphicsConfig.surfaceConfiguration.width &&
+                               directSource.size.height == webgpu::g_graphicsConfig.surfaceConfiguration.height;
+    // Logged when it changes (start, mode changes, docked resolution changes).
+    static int s_lastDirectPresent = -1;
+    if (canPresent && int(directPresent) != s_lastDirectPresent) {
+      Log.info("present: {} ({}x{} EFB, {}x{} window)", directPresent ? "direct from the EFB" : "copied first",
+               directSource.size.width, directSource.size.height,
+               webgpu::g_graphicsConfig.surfaceConfiguration.width,
+               webgpu::g_graphicsConfig.surfaceConfiguration.height);
+      s_lastDirectPresent = int(directPresent);
+    }
+    if (directPresent) {
+      currentTexture = directSource.texture;
+      currentView = directSource.view;
+    }
+#else
+    constexpr bool directPresent = false; // other backends present a real surface texture
+#endif
+    if (canPresent && !directPresent) {
       wgpu::BindGroup presentBindGroup;
       if (rmlBindGroup && !rmlOverlay) {
         presentBindGroup = rmlBindGroup;
@@ -359,7 +392,26 @@ void submit_frame(imgui::DrawData imguiDrawData) noexcept {
         }
         pass.End();
       }
-      {
+    }
+    // SFA-NX: the copy above is skipped for a direct present; the ImGui pass below then targets the EFB.
+    if (canPresent) {
+      // SFA-NX: the ImGui pass only when ImGui drew something (imgui::freeze returns an empty DrawData for a
+      // frame without vertices, and render() drew nothing for those anyway). Saves a pass start and its
+      // barrier on the swapchain image in normal play. Counted in the log line below.
+      static uint32_t s_imguiPasses = 0;
+      static uint32_t s_imguiSkipped = 0;
+      if (imguiDrawData) {
+        ++s_imguiPasses;
+      } else {
+        ++s_imguiSkipped;
+      }
+      if (s_imguiPasses + s_imguiSkipped >= 1800) { // about every 30 s at 60 fps
+        Log.info("ImGui pass: drawn {} / skipped {} of the last {} presents", s_imguiPasses, s_imguiSkipped,
+                 s_imguiPasses + s_imguiSkipped);
+        s_imguiPasses = 0;
+        s_imguiSkipped = 0;
+      }
+      if (imguiDrawData) {
         const std::array attachments{
             wgpu::RenderPassColorAttachment{
                 .view = currentView,

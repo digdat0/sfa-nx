@@ -39,6 +39,11 @@ extern "C" void Android_UnlockActivityMutex(void);
 #include "time_internal.hpp"
 #include "dolphin/vi/vi_internal.hpp"
 
+#ifdef __SWITCH__
+// SFA-NX (switch/deko/device.cpp): the docked output and render size, or 0 to use the SDL window's size.
+extern "C" int aurora_switch_frame_size(int* outW, int* outH, int* renderW, int* renderH) __attribute__((weak));
+#endif
+
 namespace aurora::window {
 namespace {
 constexpr Module Log{"aurora::window"};
@@ -309,6 +314,13 @@ const AuroraEvent* poll_events() {
   SDL_Event event;
   // Clear out the previous scroll values to prevent ghost input
   gamepad::set_mouse_scroll(0, 0);
+#ifdef __SWITCH__
+  // SFA-NX: docking, undocking or the - menu's Docked Resolution change the frame size without an SDL
+  // window event, so compare once per poll; resize_swapchain returns at once when nothing changed.
+  if (g_window != nullptr) {
+    resize_swapchain();
+  }
+#endif
   if (is_paused()) {
     ZoneScopedN("SDL_WaitEvent (paused)");
     if (SDL_WaitEvent(&event)) {
@@ -480,6 +492,20 @@ AuroraWindowSize get_window_size() {
 
   int fb_w = native_fb_w;
   int fb_h = native_fb_h;
+#ifdef __SWITCH__
+  // SFA-NX: the - menu's Docked Resolution (switch/deko/device.cpp). Docked above 720p the output is the
+  // 1920x1080 swapchain and the frame is rendered at 1600x900 or 1920x1080, while the SDL window (and so
+  // ImGui's display size) stays 1280x720. Weak so Aurora builds without the deko backend still link.
+  if (aurora_switch_frame_size != nullptr) {
+    int outW = 0, outH = 0, renderW = 0, renderH = 0;
+    if (aurora_switch_frame_size(&outW, &outH, &renderW, &renderH) != 0) {
+      native_fb_w = outW;
+      native_fb_h = outH;
+      fb_w = renderW;
+      fb_h = renderH;
+    }
+  }
+#endif
   if (g_frameBufferScale > 0.f) {
     const auto [baseW, baseH] = vi::configured_fb_size();
     const auto [scaledW, scaledH] =

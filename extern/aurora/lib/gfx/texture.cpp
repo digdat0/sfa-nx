@@ -332,17 +332,33 @@ wgpu::SamplerDescriptor TextureBind::get_descriptor() const noexcept {
   float minLod = texObj.min_lod();
   float maxLod = texObj.max_lod();
   u16 maxAnisotropy = wgpu_aniso(texObj.max_aniso());
+  // SFA-NX: a replacement with levels (its own, or made at load by texture_replacement.cpp generate_mips)
+  // whose original GX texture had none: the game asked for no mip filtering, so blend between levels
+  // (trilinear: no visible band where one level gives way to the next) and allow a little anisotropy so
+  // floors seen at a shallow angle stay sharp. switch_menu.ini hd_aniso (1, 2, 4, 8 or 16; default 2,
+  // read once) sets it.
+  const bool replacementLevels = ref && ref->isReplacement && ref->mipCount > 1 && !mipsEnabled;
   if (ref && ref->isReplacement) {
     minLod = 0.f;
     maxLod = 1000.f;
     if (!mipsEnabled) {
-      mipFilter = wgpu::MipmapFilterMode::Nearest;
+      mipFilter = replacementLevels ? wgpu::MipmapFilterMode::Linear : wgpu::MipmapFilterMode::Nearest;
     }
   } else if (mipFilter == wgpu::MipmapFilterMode::Undefined) {
     minLod = 0.f;
     maxLod = 0.f;
   }
-  if ((ref && ref->hasArbitraryMips) || !mipsEnabled) {
+  if (replacementLevels && !ref->hasArbitraryMips) {
+    static const u16 s_hdAniso = [] {
+      const int v = sfaSwitchMenuIniValue ? sfaSwitchMenuIniValue("hd_aniso", 2) : 2;
+      return u16(v >= 16 ? 16 : v >= 8 ? 8 : v >= 4 ? 4 : v >= 2 ? 2 : 1);
+    }();
+    maxAnisotropy = s_hdAniso;
+    if (maxAnisotropy > 1) { // (WebGPU: anisotropy needs linear filters throughout)
+      magFilter = wgpu::FilterMode::Linear;
+      minFilter = wgpu::FilterMode::Linear;
+    }
+  } else if ((ref && ref->hasArbitraryMips) || !mipsEnabled) {
     maxAnisotropy = 1;
   } else if (maxAnisotropy > 1) {
     magFilter = wgpu::FilterMode::Linear;

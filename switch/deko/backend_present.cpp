@@ -66,7 +66,7 @@ void kartpad_deko_present(WGPUTexture texture, unsigned width, unsigned height) 
         swdk::image_slot_free(slot);
         checkpoint.finish(true);
       },
-      &picture, acquired ? &image : nullptr);
+      &picture, acquired ? &image : nullptr, /*fullWindow=*/true); // one draw over the whole window
 }
 
 namespace kd {

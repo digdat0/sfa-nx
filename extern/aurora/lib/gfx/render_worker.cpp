@@ -83,16 +83,17 @@ void enqueue(QueueItem item) {
 }
 } // namespace
 
-BoundedQueue::BoundedQueue(size_t capacity) : m_capacity(capacity) {}
+BoundedQueue::BoundedQueue(size_t capacity) : m_capacity(capacity), m_ring(capacity) {}
 
 bool BoundedQueue::push(QueueItem item) {
   ZoneScoped;
   std::unique_lock lock{m_mutex};
-  m_notFull.wait(lock, [&] { return m_closed || m_items.size() < m_capacity; });
+  m_notFull.wait(lock, [&] { return m_closed || m_count < m_capacity; });
   if (m_closed) {
     return false;
   }
-  m_items.emplace_back(std::move(item));
+  m_ring[(m_head + m_count) % m_capacity] = std::move(item); // SFA-NX ring (render_worker.hpp)
+  ++m_count;
   lock.unlock();
   m_notEmpty.notify_one();
   return true;
@@ -100,13 +101,16 @@ bool BoundedQueue::push(QueueItem item) {
 
 std::optional<QueueItem> BoundedQueue::pop_for(std::chrono::milliseconds timeout, bool& closed) {
   std::unique_lock lock{m_mutex};
-  m_notEmpty.wait_for(lock, timeout, [&] { return m_closed || !m_items.empty(); });
-  closed = m_closed && m_items.empty();
-  if (m_items.empty()) {
+  m_notEmpty.wait_for(lock, timeout, [&] { return m_closed || m_count != 0; });
+  closed = m_closed && m_count == 0;
+  if (m_count == 0) {
     return std::nullopt;
   }
-  auto item = std::move(m_items.front());
-  m_items.pop_front();
+  // SFA-NX ring: take the oldest slot and leave it empty (its moved-from callback is reset too)
+  auto item = std::move(m_ring[m_head]);
+  m_ring[m_head] = QueueItem{};
+  m_head = (m_head + 1) % m_capacity;
+  --m_count;
   lock.unlock();
   m_notFull.notify_one();
   return item;
@@ -124,7 +128,12 @@ void BoundedQueue::close() {
 void BoundedQueue::reset() {
   {
     std::lock_guard lock{m_mutex};
-    m_items.clear();
+    // SFA-NX ring: drop every queued item (releases their callbacks), keep the slots
+    for (auto& slot : m_ring) {
+      slot = QueueItem{};
+    }
+    m_head = 0;
+    m_count = 0;
     m_closed = false;
   }
   m_notFull.notify_all();
@@ -132,7 +141,7 @@ void BoundedQueue::reset() {
 
 size_t BoundedQueue::size() const {
   std::lock_guard lock{m_mutex};
-  return m_items.size();
+  return m_count;
 }
 
 FrameSlotPool::FrameSlotPool(size_t slotCount) : m_freeSlots(slotCount, true) {}

@@ -84,6 +84,7 @@
 #include "main/gameloop_gamebit.h"
 #include "main/hud_visibility.h"
 #include "main/sky.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD aspect correction scopes
 
 #define GAMEBIT_FLAG_WIDTH_MASK 0x1f /* bit-run length: (mask)+1 bits stored for this entry */
 #define GAMEBIT_FLAG_SYNC       0x20 /* request a save-sync when this bit is written */
@@ -677,7 +678,10 @@ static void gameUpdate(void)
         {
             curUiDllDraw(0, 0, 0, 0);
         }
+        // SFA-NX: the minimap and its compass are the bottom-left panel (widescreen HUD correction)
+        fhHudPush(FH_HUD_LEFT);
         gMinimapInterface->vtable->update();
+        fhHudPop();
         if (gGameLoopButtonObjectCount == 0)
         {
             dvdCheckError();
@@ -777,7 +781,10 @@ static void gameLoop(void) {
             dvdCheckError();
             gameTextRun();
         }
+        // SFA-NX: subtitles are centred UI (widescreen HUD correction)
+        fhHudPush(FH_HUD_CENTRE);
         subtitleUpdateAndDraw(0);
+        fhHudPop();
         doNothing_endOfFrame();
         gameTextSetDrawFunc(0);
     }

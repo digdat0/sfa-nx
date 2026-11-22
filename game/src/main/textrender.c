@@ -17,6 +17,7 @@
 #include "track/intersect_render_setup.h"
 #include "dolphin/gx/GXCull.h"
 #include "dolphin/gx/GXGet.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD correction (text box clip)
 
 extern char sDiscReadingMessage[];
 extern char sDiscInsertPromptLine[];
@@ -694,7 +695,9 @@ void textRenderStr(char* str, GameTextBox* win, f32 x, f32 y, f32 lineH, int mod
                 int iw = g->advanceX + (g->width + g->offsetX);
                 int ih = g->advanceY + (g->height + g->offsetY);
                 GXGetScissor(&scisX, &scisY, &scisW, &scisH);
-                gxSetScissorRect(0, 0, winBase[126].x, winBase[126].y, winBase[126].x + winBase[126].width,
+                // SFA-NX: the box's clip moves with its text under the widescreen HUD correction (fhHudMapX)
+                gxSetScissorRect(0, 0, (int)fhHudMapX((f32)winBase[126].x), winBase[126].y,
+                                 (int)(fhHudMapX((f32)(winBase[126].x + winBase[126].width)) + 0.5f),
                                  winBase[126].y + winBase[126].height);
                 fx0 = (f32)(winBase[126].x + ((winBase[126].width - iw) >> 1));
                 fx1 = fx0 + iw;

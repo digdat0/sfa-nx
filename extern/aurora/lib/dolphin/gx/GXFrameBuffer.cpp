@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <cmath>
 
+// SFA-NX: the − menu's switch_menu.ini values (switch/src/switch_menu.cpp); absent outside the Switch build.
+extern "C" int sfaSwitchMenuIniValue(const char* key, int def) __attribute__((weak));
+
 namespace {
 u16 sDispCopySrcHeight;
 
@@ -44,8 +47,21 @@ aurora::Vec2<uint32_t> scale_copy_dst(u32 logicalWidth, u32 logicalHeight) {
     return {logicalWidth, logicalHeight};
   }
 
-  const float scaleX = static_cast<float>(targetWidth) / static_cast<float>(logicalFbWidth);
-  const float scaleY = static_cast<float>(targetHeight) / static_cast<float>(logicalFbHeight);
+  float scaleX = static_cast<float>(targetWidth) / static_cast<float>(logicalFbWidth);
+  float scaleY = static_cast<float>(targetHeight) / static_cast<float>(logicalFbHeight);
+  // SFA-NX: above a 720-line render target (docked 900p/1080p), copies of half the screen or less (the
+  // game's half-size colour and depth copies that water and haze effects sample, already blurred by the
+  // halving) keep the size they have at 720p. At 1080p they were 960x540 and cost ~1 ms a frame between
+  // the copies and the draws sampling them; larger copies keep the full scale. switch_menu.ini
+  // copy_cap=0 turns it off (read once).
+  static const bool s_copyCap = sfaSwitchMenuIniValue == nullptr || sfaSwitchMenuIniValue("copy_cap", 1) != 0;
+  constexpr uint32_t CapLines = 720;
+  if (s_copyCap && targetHeight > CapLines && logicalWidth * 2 <= logicalFbWidth &&
+      logicalHeight * 2 <= logicalFbHeight) {
+    const float cap = static_cast<float>(CapLines) / static_cast<float>(targetHeight);
+    scaleX *= cap;
+    scaleY *= cap;
+  }
   const auto scaledWidth = std::max<u32>(static_cast<u32>(std::lround(static_cast<float>(logicalWidth) * scaleX)), 1);
   const auto scaledHeight = std::max<u32>(static_cast<u32>(std::lround(static_cast<float>(logicalHeight) * scaleY)), 1);
   return {scaledWidth, scaledHeight};
