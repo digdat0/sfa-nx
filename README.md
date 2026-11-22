@@ -23,6 +23,22 @@ Note: This is an AI assisted project.
 
 The first start takes longer while shaders are prepared. Save from the game's own menu.
 
+### Precompiled shaders
+
+SFA-NX ships with about 900 precompiled shaders built into the `.nro`, collected from test play on the Switch and
+in Ryujinx. When the game meets a shader that isn't in that set, it compiles it on the spot, which can cause a
+short stutter the first time you enter an area or see an effect. Each new shader is saved in the `cache/`
+folder, so it only happens once.
+
+You can help everyone get a smoother first play: after a long session or reaching new areas, share your cache.
+
+1. Copy the `cache` folder from `sdmc:/switch/SFA-NX/` to your computer and zip it. Leave out any `.nro`
+   files in it (`update.nro`, `previous.nro`): they are only update downloads.
+2. Open a [new issue](https://github.com/digdat0/sfa-nx/issues/new) titled "Shader cache", say roughly how far
+   into the game you are, and attach the zip.
+
+New shaders from shared caches are merged into the next release. The cache holds no saves or personal data.
+
 SFA-NX creates its own folders next to the `.nro` on the first start:
 
 ```
@@ -41,13 +57,29 @@ sdmc:/switch/SFA-NX/
 
 Press **−** in game to open the options menu.
 
-- **Game**: Show FPS, Invert Look, HD Textures, Docked Resolution, Widescreen HUD, Language, Button Mapping,
-  Updates, Extra Logging.
-- **Debug**: performance and renderer settings for testing. Hidden unless `config/switch_menu.ini` contains
-  the line `debug_menu=1`.
+| Option | What it does |
+|---|---|
+| **Show FPS** | Shows the frame rate in the corner of the screen. |
+| **Invert Look** | Flips the vertical stick for the camera, aiming, the Arwing and the CloudRunner flights. |
+| **HD Textures** | Turns the HD texture pack on or off (see [HD textures](#hd-textures)). Applies at the next start. |
+| **Docked Resolution** | Render size on a TV: 720p, 900p or 1080p. Applies at once. Handheld always renders at 720p. |
+| **Widescreen HUD** | **Corrected** (default) keeps the HUD, icons and menus at their original shape in 16:9; **Stretched** shows them stretched to the screen's width, as the original game does. |
+| **Language** | The game's language (see [Languages](#languages)). Applies at the next start. |
+| **Button Mapping** | Remaps the controls. **Reset To Defaults** restores the GameCube layout. |
+| **Updates** | Checks GitHub for a newer release (see [Updates](#updates)). |
+| **Extra Logging** | Writes more detail to the log for bug reports (see [Reporting a problem](#reporting-a-problem)). |
+
+Settings are saved at once. When a change needs a restart, a **Restart** row appears at the bottom of the menu.
 
 Default controls follow the GameCube layout: ZL / ZR are the L / R triggers and R is Z. You can change them
 under **Button Mapping**.
+
+## Languages
+
+The PAL disc (GSAP01) contains English, French, German, Italian and Spanish. The game starts in English; to
+change the language, open **−** → **Language**, pick one with **Left** / **Right**, then choose **Restart**. The
+options menu switches to the new language after the restart too. The US (GSAE01) and Japanese (GSAJ01) discs only contain
+their own language, so the option shows "PAL disc only" there.
 
 ## Reporting a problem
 
@@ -101,7 +133,7 @@ SFA-NX is built on the work of these projects and people:
 - [SDL](https://github.com/libsdl-org/SDL): input, audio and windowing.
 - [devkitPro](https://devkitpro.org/): devkitA64, libnx, deko3d and the portlibs (curl, zlib).
 - [uam](https://github.com/devkitPro/uam) by fincs, with Mesa: the deko3d shader compiler.
-- Melee-NX by KawaiiBunga, KartPadNX, and [centollOS/SwitchWaker](https://github.com/centollOS/SwitchWaker): the
+- [Melee-NX](https://github.com/KawaiiBunga/Melee-NX) by KawaiiBunga, KartPadNX, and [centollOS/SwitchWaker](https://github.com/centollOS/SwitchWaker): the
   deko3d renderer and Switch platform layer (MIT and MPL-2.0, see [switch/deko/THIRD_PARTY.md](switch/deko/THIRD_PARTY.md)).
 - [borealis](https://github.com/encounter/borealis), MusyX and
   [nlohmann/json](https://github.com/nlohmann/json).
