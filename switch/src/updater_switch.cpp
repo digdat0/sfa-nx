@@ -434,15 +434,36 @@ extern "C" int sfaUpdaterState(int* percent, char* tag, size_t tagSize) {
 static bool g_relaunch = false;
 extern "C" int sfaRelaunchPending(void) { return g_relaunch ? 1 : 0; }
 
+// Shared by the Restart row and the updater: asks hbloader to start this NRO again and sets g_relaunch, so
+// shutdown_and_exit takes the clean path back to hbloader. Returns false on loaders without next-load support.
+static bool request_relaunch() {
+    if (!envHasNextLoad()) {
+        return false;
+    }
+    envSetNextLoad(g_nroPath.c_str(), g_nroPath.c_str());
+    g_relaunch = true;
+    return true;
+}
+
 extern "C" void sfaRelaunch(void) {
-    if (envHasNextLoad()) {
-        envSetNextLoad(g_nroPath.c_str(), g_nroPath.c_str());
-        g_relaunch = true;
+    if (request_relaunch()) {
         pc_log_line("[sfa-nx] restart: relaunching %s", g_nroPath.c_str());
     } else {
         pc_log_line("[sfa-nx] restart: no relaunch available, quitting");
     }
     fhRequestQuit();
+}
+
+// Restart path (vi_shim.c's shutdown_and_exit): closes curl and the socket service if the updater opened them.
+// Under hbloader the process outlives this NRO, so an open bsd session and its transfer memory (heap pages
+// locked to the service) would carry over into the relaunched NRO.
+extern "C" void sfaUpdaterReleaseNet(void) {
+    if (!g_netReady) {
+        return;
+    }
+    curl_global_cleanup();
+    socketExit();
+    g_netReady = false;
 }
 
 // The menu's A press: starts the next step for the current state (see the top of the file).
@@ -462,8 +483,9 @@ extern "C" void sfaUpdaterActivate(void) {
         }
         // Ask hbloader to start the new NRO when this one exits. Without that support (some loaders) the
         // update is still installed and takes effect the next time SFA-NX is started.
-        if (envHasNextLoad()) {
-            envSetNextLoad(g_nroPath.c_str(), g_nroPath.c_str());
+        // request_relaunch also sets g_relaunch: without it shutdown_and_exit ended the whole process
+        // (title takeover showed "the software was closed") instead of returning to hbloader (v1.0.0 bug).
+        if (request_relaunch()) {
             pc_log_line("[sfa-nx] updater: relaunching %s", g_nroPath.c_str());
         } else {
             pc_log_line("[sfa-nx] updater: installed; no relaunch available");
