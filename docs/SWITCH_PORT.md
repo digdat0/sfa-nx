@@ -146,8 +146,8 @@ Result on hardware: the frame fence wait dropped from 3–7 ms to about 0 ms, so
   (23.3 s to 18.7 s).
 - **Shipped shader seed.** Compiling a pipeline on the console (WGSL → Tint → GLSL → uam) takes 170–260 ms. After a
   cache wipe, the first loads showed a black screen for about two minutes. `switch/builder/seed-caches.py` merges
-  console and Ryujinx caches into `switch/seed/initial_dksh_cache.bin` (922 compiled shaders) and
-  `initial_pipeline_cache.db` (2045 pipeline recipes). Both are packed into the NRO's RomFS and read from
+  console and Ryujinx caches into `switch/seed/initial_dksh_cache.bin` (989 compiled shaders) and
+  `initial_pipeline_cache.db` (3130 pipeline recipes). Both are packed into the NRO's RomFS and read from
   `romfs:` at start. In Ryujinx, a pipeline build dropped from 313 ms to 1.3 ms with the seed.
 - **Uniforms.** Rebuilt only when the pipeline configuration changed, and written straight into the frame's
   uniform buffer.

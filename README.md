@@ -25,7 +25,7 @@ The first start takes longer while shaders are prepared. Save from the game's ow
 
 ### Precompiled shaders
 
-SFA-NX ships with about 900 precompiled shaders built into the `.nro`, collected from test play on the Switch and
+SFA-NX ships with about 1,000 precompiled shaders built into the `.nro`, collected from test play on the Switch and
 in Ryujinx. When the game meets a shader that isn't in that set, it compiles it on the spot, which can cause a
 short stutter the first time you enter an area or see an effect. Each new shader is saved in the `cache/`
 folder, so it only happens once.

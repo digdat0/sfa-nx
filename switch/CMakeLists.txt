@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.25)
 # VERSION is the release version: the NRO's metadata and the in-app updater (SFA_NX_VERSION) use it, so
 # bump it for each GitHub release.
 # 1.0.0: first SFA-NX release; the updater compares release tags against this.
-project(sfa-nx LANGUAGES C CXX ASM VERSION 1.0.0)
+project(sfa-nx LANGUAGES C CXX ASM VERSION 1.0.1)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
