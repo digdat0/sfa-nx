@@ -4,7 +4,8 @@ How Star Fox Adventures went from the decompilation to a native Switch homebrew 
 what was done to make it run well on the console. Build instructions are in [switch/README.md](../switch/README.md);
 this document explains the why.
 
-Timeline: first hardware boot 2026-11-16, playable with HD textures 2026-11-20.
+Timeline: first hardware boot 2026-11-16, playable with HD textures 2026-11-20, first public release (v1.0.0
+beta) 2026-11-22.
 
 ## 1. Starting point
 
@@ -17,6 +18,27 @@ Timeline: first hardware boot 2026-11-16, playable with HD textures 2026-11-20.
 Foxhollow runs the USA 1.0 code. PAL (GSAP01) and Japanese discs are accepted through Aurora's asset mapping, so
 any region's disc works. All Switch work lives in `switch/`; changes to shared code are kept small and behind
 `__SWITCH__`.
+
+### 1.1 What was kept, changed and replaced
+
+Counted against the last upstream Foxhollow commit (`b521849`). The game and Foxhollow's port layer came over
+almost unchanged; nearly everything below Aurora was replaced.
+
+| Part | On the Switch | Size of the change |
+|---|---|---|
+| Game code (`game/`, the decomp) | **Kept**, compiled with Clang as upstream. Small fixes: float-to-integer casts, invert look, the widescreen HUD scopes, and crash fixes found by the shader tour (a negative texture bank index, a missing animation) | 97 of 1807 files, +828 / −369 lines |
+| Foxhollow port layer (`port/`: VI, OS, AI, autosave shims) | **Kept.** Changed: the restart path (`vi_shim.c`), the MusyX audio thread and adaptive queue (`ai_shim.c`), `OSDisableInterrupts` as a real lock once audio runs on its own thread (`os_shim.c`). Added: the THP movie worker and the widescreen HUD correction (`fh_hud_aspect.c`) | 9 files, +752 / −34 lines |
+| Foxhollow's PC entry point (`src/main.c`) | **Replaced** by `switch/src/main_sfa.cpp`: SD folders, launch-mode and disc checks, RomFS, language, logs, crash-report copies | New |
+| Aurora (GX, VI, PAD, DVD, card) | **Kept and patched.** 19 patches in `switch/patches/` (Horizon file I/O, no mmap or backtraces, card saves, GX command processor cost, pipeline cache recovery) plus edits in `extern/aurora` (frame overlap, FIFO locking, direct present, copy cap, HD mip generation) | 36 files, +3083 / −1424 lines, plus the patches |
+| Aurora's disc reader (nod, Rust) | **Replaced** by a small C reader for ISO/GCM and RVZ (`switch/src/nod/`) behind nod's API | New |
+| Dawn (WebGPU) | **Reduced** to the Null backend: it still owns objects, and Tint turns WGSL into GLSL. It records no GPU work | Patches for libnx, abseil and the surface |
+| GPU backend (Vulkan / D3D12 / Metal on PC) | **Replaced** by deko3d: the `kd` shim and the direct recorder (`switch/deko/`), from Melee-NX / KartPadNX / SwitchWaker, much of it rewritten here | `switch/deko/`, new |
+| Shader compiler (the driver's on PC) | **Replaced** by uam (Mesa's GLSL front end and Maxwell code generator, `switch/uam/`) running on the console, plus the shipped shader seed | Vendored |
+| deko3d library | **Vendored and patched** instead of devkitPro's build (`switch/third_party/deko3d`) | Vendored |
+| SDL3 (input, audio, window) | **Kept**, with 5 patches: Switch support from Melee-NX, external graphics, the shoulder buttons, non-blocking audio | Patches |
+| C runtime | newlib, with **dlmalloc** in place of its malloc, wrappers for `exit` / `pthread_create` / thread-local storage, and a SQLite VFS for Horizon | New |
+| Mods | PC texture packs **work** (`mods/hd`, section 4.8). Native `mod.dll` code **does not run** on the Switch | — |
+| Added for the Switch | − options menu, updater, profiler, GPU timing, shader tour, async log writer, vsync pacing, thread placement (`switch/src/`) | About 38,000 lines in `switch/` (deko, src, patches, builder, cmake, tools; dlmalloc included), not counting uam and deko3d |
 
 ## 2. Architecture on the console
 
@@ -36,11 +58,18 @@ game (decomp, Clang)            Foxhollow port layer         Aurora
 - **Direct renderer.** `switch/deko/direct.cpp` records eligible render passes (viewport, scissor, GX draws,
   clears) straight into deko3d command lists and skips Dawn's render pass and encoder. It is the default
   (− menu → Debug → Renderer).
+- **deko3d from source.** deko3d 0.5.0 is vendored in `switch/third_party/deko3d` with three patches (alpha
+  destination blend factor, a command-buffer clear leak, a flush guard; listed in its `PATCHES.md`) instead of
+  devkitPro's prebuilt `libdeko3d`. The log says "deko3d 0.5.0 from source with SFA-NX patches 1-3".
 - **Threads.** The game thread (main), Aurora's FIFO processor, the render worker, the pipeline compiler, the audio
   mixer, the movie decoder and the log writer each get an assigned core and priority (`switch/src/perf_switch.cpp`,
-  − menu → Threads).
+  − menu → Debug → Threads).
+- **Allocator.** newlib's malloc is replaced by dlmalloc 2.8.6 (`switch/src/malloc_switch.c`, section 4.6).
 - **Toolchain.** devkitA64 GCC through devkitPro's msys2 on Windows, no Docker. The game code alone is compiled
   with Clang (section 3.3).
+
+The − menu's Debug tab is hidden in release builds. `debug_menu=1` in `config/switch_menu.ini` shows it (L / R
+switch tabs).
 
 ## 3. Getting it to boot and render correctly
 
@@ -99,6 +128,23 @@ confirmed that all rendering issues were gone (build 1404).
   ZL/ZR = L/R, R = Z.
 - Button remapping and invert look are in the − menu. Invert look covers the viewfinder, the Arwing, staff aiming
   and the CloudRunner sections.
+
+### 3.6 Restarting under hbloader
+
+The − menu's Restart row and the updater quit and ask hbloader (`envSetNextLoad`) to start the NRO again. Under
+hbloader the process outlives the NRO: hbloader maps the next NRO into the same process, so anything the old one
+leaves behind carries over. Each failure on hardware showed one more thing to clean up:
+
+| Symptom on hardware | Cause | Fix |
+|---|---|---|
+| "The software was closed", nothing restarts, no crash report | `clang_tls_switch.c` wraps `exit` to `svcExitProcess`, which ends hbloader too | When a relaunch is pending, `shutdown_and_exit` (`port/src/vi_shim.c`) returns to hbloader through `__real__exit` |
+| Same, in build 1511 | The async log writer was still running, so the relaunch fell back to the old exit | `kartpad_end_threads` stops the log writer first, waits up to 2 s for every thread made through the pthread wrapper and logs `exit: N threads created this run, N left` to `boot.txt` |
+| hbloader aborts with 2001-0106 (InvalidCurrentMemory) | deko3d memory blocks still locked heap pages that hbloader reuses for the next NRO | `aurora_switch_dk_release_all` destroys every tracked memory block, the command buffer, the queue and the device |
+| The second restart in a row aborts in the new NRO's `__appInit` (2345-0031) | Services opened by the old NRO stayed open (apm, clkrst) and the RomFS file handle leaked | `sfaSwitchMenuReleaseServices` (restores the GPU clock, closes apm and clkrst) and `romfsUnmount` |
+| The updater's restart (v1.0.0 beta, first build) closed the software like the first row | The updater set the next load but not the relaunch flag, so it took the plain exit | Both paths share `request_relaunch` (`switch/src/updater_switch.cpp`); `sfaUpdaterReleaseNet` also closes curl and the socket service |
+
+Repeated restarts and an update with restart both work on hardware (confirmed 2026-11-20 and 2026-11-22).
+`boot.txt` logs a `limits sessions/events/threads/tmem` line each run, so a new leak shows up as a growing count.
 
 ## 4. Performance work
 
@@ -206,21 +252,99 @@ of frames to under 1%.
 | Shader compile time for all 1340 recipes (host uam) | 23.3 s (567 shaders) | 18.7 s (393 shaders), −20% |
 | Pipeline build on first use (Ryujinx) | 313 ms | 1.3 ms with the shipped seed |
 | Black-screen loading after a cache wipe | About 2 minutes | Seeded shaders load from RomFS; only new shaders are compiled |
+| FIFO thread time in `malloc` after 32 min of play | 5 → 14 ms/frame (newlib) | dlmalloc; the frame rate held over an 85 min session (section 4.6) |
+| Heap growth during play | About 15 MB/min, until deko3d aborted (about 85 min) | Leak fixed in the vendored deko3d (section 4.6) |
+| Present copy at docked 1080p | 1.2 ms/frame | Skipped: the EFB goes straight to the screen (section 4.7) |
+
+### 4.6 Long sessions: allocator and leaks
+
+Two problems only showed after half an hour or more. Both were found from the 30 s statistics lines in the log.
+
+- **Frame rate falling with play time (build 1747, 32 min handheld).** The frame rate fell from 54 to 33–45 fps
+  regardless of the area. newlib's `_malloc_r` on the FIFO thread grew from 5 to 14 ms per frame, because its bin
+  walk for 512–2559 byte requests got longer as free chunks piled up (4,700 → 96,000). The render worker waited
+  5 → 15 ms per frame on newlib's malloc lock.
+  - Fix (build 2313): dlmalloc 2.8.6 replaces every newlib malloc entry point (`switch/src/malloc_switch.c`, libnx
+    mutex locks; `build.sh` fails if newlib's malloc still links in). `operator new` goes through it too, so caller
+    sampling sees real call sites. Aurora's per-draw churn was cut as well: a fixed ring for the render worker
+    queue, only new texture uploads per frame op, recycled command lists, flat hash maps for bind groups.
+  - Result on hardware (build 1601, 85 min handheld): 59.6–60 presents per second for the whole session, even with
+    227,000 free chunks. About 300 mallocs per present in steady play.
+- **Crash after about 85 minutes (2359-0003).** deko3d aborted with OutOfMemory in `CmdBuf::appendCtrlCmd`. The
+  heap in use had grown linearly from 2.0 to 2.9 GB, about 15 MB per minute, and earlier sessions showed the same
+  growth. deko3d 0.5.0's `CmdBuf::clear` returned only the first control chunk of a chain to the free list and
+  orphaned the rest.
+  - Fix (build 0719): deko3d is built from source with the leak patched (section 2). The same pass fixed the
+    breadcrumb serial, which counts every draw and would have hit a fatal check after about 74 hours.
+  - After the fix the heap in use stays around 1.8–1.9 GB in play (2026-11-22 logs). A session as long as the one
+    that crashed has not been logged yet.
+- **Finding the next leak.** With Extra Logging on, the allocator samples every 64th allocation and the log prints
+  `[dk] heap live: ... growth since first report by caller: 0xADDR:+NK` every 30 s. The addresses resolve with
+  `addr2line` against the build's saved `.elf`.
+
+### 4.7 GPU time per pass and docked 1080p
+
+While the profiler is on, one frame in 120 gets GPU timestamps around each render pass (`switch/deko/gpu_timing.cpp`,
+`[dk] gpu time` lines), and every fifth sample times each draw on its own (`gpu draws` lines). That per-draw frame
+is inflated by the barriers, so it is only used to rank draws.
+
+- **Handheld, 720p (warp tour, 146 per-draw samples):** 59–60 fps with the frame fence at about 0 ms. GPU pass time
+  averages 4.6 ms (p90 6.9, max 15.8). No single draw stands out. The recurring fixed costs are a full-screen
+  blended overlay the game draws (about 0.65 ms), the EFB-to-screen copy (0.34 ms), and the RGB565/Z8 screen
+  copies for water and haze with the overlay that samples them (about 0.8 ms together).
+- **Docked, 1080p (1106 samples):** GPU time averages 10.5 ms (p90 14.8, p99 19.2), and 6.5% of samples exceed the
+  16.7 ms budget. Map 7 is GPU-bound (average 13.7 ms, 47–57 fps); the other maps mostly hold 59–60. Cost scales
+  with memory bandwidth: 2.25× the pixels of 720p on only 1.2× the memory clock. Docked 720p held 60 fps.
+- **Fixes for docked 1080p (build 1554):**
+  - **Direct present.** When the EFB is exactly the window size, it is presented as is and the 1.2 ms copy pass is
+    skipped. ImGui draws into the EFB. 900p keeps the copy. Log: `present: direct from the EFB`.
+  - **Copy cap.** Above 720 lines, screen copies of half the screen or less are made at the 720p size (960×540 →
+    640×360), which the water and haze draws sample anyway.
+  - The game's own full-screen overlay (0.85 ms at 1080p) is left alone: there is no safe way to cut it.
+- **Docked Resolution** in the − menu picks 720p, 900p or 1080p. Handheld always renders at 720p.
+
+### 4.8 HD textures
+
+- The GameBanana pack held 58–60 presents per second on hardware, with little frame-rate cost.
+- 2716 of the pack's 4029 DDS files have a single mip level, which shimmers and costs bandwidth when minified.
+  Aurora's texture workers now generate the missing levels at load (`texture_replacement.cpp`, files of 64 px or
+  more): a 2×2 box filter with coverage-preserving alpha for cut-outs, re-encoded to BC1/BC3. On the PC that takes
+  about 7 ms per texture, with a worst error of 4–10/255 on levels 1–4. Log: `mipmaps made for N textures`.
+- Non-power-of-two files gave thumbnails that are not aligned to 4×4 blocks. Aurora refused them, so the original
+  texture showed until the full load. Those thumbnails are now decoded to RGBA8.
 
 ## 5. Features added for the Switch
 
 - **− options menu** (`switch/src/switch_menu.cpp`, ImGui):
-  - **Game tab:** FPS, invert look, HD textures, button mapping, updates.
-  - **Debug tab:** renderer, threads, GPU options, pacing, profiler, shader tour.
-  - Settings are saved in `config/switch_menu.ini`.
+  - **Game tab:** Show FPS, Invert Look, HD Textures, Docked Resolution, Widescreen HUD, Language, Button
+    Mapping, Updates, Extra Logging. When a change only applies at the next start, a Restart row appears.
+  - **Debug tab** (hidden unless `debug_menu=1`): renderer, threads, GPU options, pacing, profiler, shader tour.
+  - Settings are saved in `config/switch_menu.ini`. The Game tab follows the game's language; the Debug tab stays
+    English.
+- **Widescreen HUD** (`port/src/fh_hud_aspect.c`). In the game's 16:9 mode every 2D element (HUD, menus, minimap,
+  subtitles, text) was drawn through a 640×480 projection stretched 4/3 wide. Inside marked scopes, UI quads now
+  get a projection 3/4 as wide, pinned to the left edge, the centre, the right edge or the quad's own centre
+  (reticles placed on 3D positions). Text box scissors are mapped too. Full-screen quads (600 px or wider) and
+  quads parked off screen keep the original mapping, so fades, filters and the hidden START panel are unchanged.
+  The original stretched look is still a menu choice.
+- **Languages.** Foxhollow runs the USA code, which has no language menu and reads the language from
+  `FOXHOLLOW_LANGUAGE`. `main_sfa.cpp` sets it from the menu's Language setting (the game's numbering: 0 English,
+  1 French, 2 German, 3 Italian, 5 Spanish). Only the PAL disc holds the other languages, so on other discs the
+  row shows "PAL disc only". The disc ID is read through the RVZ header too: reading an RVZ's first bytes as a disc
+  made the PAL disc look like another region.
 - **HD textures** (`switch/src/hd_textures_switch.cpp`). The GameBanana pack goes in `mods/hd/`; Aurora's texture
   replacement loads DDS files, with an LRU cache capped at 512 MB. 34 files in the pack that don't match the
   curated set are skipped by hash.
 - **In-game updater** (`switch/src/updater_switch.cpp`):
-  - Checks GitHub releases (libcurl with libnx SSL) and downloads `SFA-NX.nro` to `cache/update.nro`.
+  - Checks GitHub's latest release (libcurl with libnx SSL) and downloads `SFA-NX.nro` to `cache/update.nro`.
+    GitHub's "latest" never returns a pre-release, so beta builds are marked "(beta)" in the title instead.
   - Verifies size, NRO magic and the release's SHA-256 digest.
-  - Swaps the file in, keeping the previous one as `cache/previous.nro` until the next start, and relaunches with
-    `envSetNextLoad`.
+  - Swaps the file in, keeping the previous one as `cache/previous.nro` until the next start, and relaunches
+    through hbloader (section 3.6). Confirmed on hardware 2026-11-22.
+  - Saves, settings, caches and mods are not touched.
+- **Logging** (`switch/src/log_switch.cpp`). One `logs/log.txt` holds the last 10 runs (16 MiB cap), written by a
+  background thread. Extra Logging adds the leak finder, GPU progress samples and per-frame HUD statistics; it is
+  off by default because it costs some speed. Atmosphere crash and fatal reports are copied into `logs/` at start.
 - **Shader tour** (`switch/src/shader_tour_switch.c`): warps through every map to fill the shader caches, used to
   build the seed. Left/Right on its menu line picks a route. Route 1 stops where each warp lands. Route 2 then
   teleports to the loaded object farthest from that point, and route 3 makes one more hop to the object farthest
@@ -228,13 +352,14 @@ of frames to under 1%.
   the player straight on (warps 93 and 94 ping-pong between each other). A stop therefore counts only after the
   player has stayed loaded for 3 s in a row, and a warp whose player vanishes 3 times is written to
   `config/shader_tour_skip` and skipped by every later tour. Delete that file to try those warps again.
-- **SD layout:** only the NRO, the disc image and folders (`config/`, `cache/`, `user/`, `logs/`, `mods/`). Logs and
-  crash reports from Atmosphere are collected in `logs/`.
+- **SD layout:** only the NRO, the disc image and folders (`config/`, `cache/`, `user/`, `logs/`, `mods/`). The
+  shader and pipeline seeds are inside the NRO's RomFS, so a release is the NRO alone.
 
 ## 6. Testing
 
 - **Hardware.** Every build's ELF is kept in `debug/SFA-NX-HHMM.elf` so crash addresses can be symbolised against
-  the exact build. Logs come from `sdmc:/switch/SFA-NX/logs/`.
+  the exact build. Logs come from `sdmc:/switch/SFA-NX/logs/`; `boot.txt` holds the build stamp, the start-up steps
+  and the restart lines.
 - **Ryujinx.** Used for smoke tests: the attract demo loads maps with no input. Ryujinx can't show GPU clock,
   compression or Z-cull effects, its GPU timestamps read 0, and its uam times are distorted. Performance numbers
   are only taken on hardware.
@@ -242,7 +367,10 @@ of frames to under 1%.
 
 ## 7. Open items
 
-- The updater's relaunch has not been tested on hardware (Ryujinx does not implement `envSetNextLoad`).
 - The cause of the original GPU hang (2348-0006) has not been confirmed. The breadcrumbs are in place for the next
   occurrence.
+- A session longer than 85 minutes after the deko3d leak fix has not been logged (section 4.6).
+- Docked 1080p is GPU-bound on map 7 (section 4.7). Docked 720p held 60 fps; 900p has not been measured.
+- New shaders need a new NRO, because the seed lives in RomFS. A separate shader pack the updater could fetch on its
+  own, valid for one compiler ID, was considered and put on hold.
 - Native `mod.dll` parts of PC mods (beta/health/logo variants, glyphs) do not run on the Switch.
