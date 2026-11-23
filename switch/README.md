@@ -28,7 +28,7 @@ git clone --depth 1 -b release-3.4.10 https://github.com/libsdl-org/SDL ref/SDL-
 #   dawn-switch-renderdoc.patch is malformed: add `|| defined(__SWITCH__)` to the __linux__ line of
 #   ref/dawn/third_party/renderdoc/renderdoc/api/app/renderdoc_app.h by hand.
 py -3 switch/builder/prepare-deko.py --dawn ref/dawn
-(cd ref/SDL-dusklight && for p in switch melee-nx sfa-nx sfa-nx-shoulders; do git apply --recount --ignore-space-change ../../switch/patches/sdl-dusklight-$p.patch; done)
+(cd ref/SDL-dusklight && for p in switch melee-nx sfa-nx sfa-nx-shoulders sfa-nx-rumble; do git apply --recount --ignore-space-change ../../switch/patches/sdl-dusklight-$p.patch; done)
 # libraries
 bash switch/build-dawn.sh      # build-switch-dawn/  (Dawn Null + Tint, ~15 min the first time)
 bash switch/build-sdl.sh       # build-switch-sdl/libSDL3.a

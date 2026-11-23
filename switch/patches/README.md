@@ -13,6 +13,7 @@ Most of this folder came over from Melee-NX together with the renderer. SFA-NX a
 | `sdl-dusklight-switch.patch`, `sdl-dusklight-melee-nx.patch` | once, by hand | SDL's Switch backends (see the SDL tables below) |
 | `sdl-dusklight-sfa-nx.patch` | once, by hand | Audio PlayDevice no longer blocks under the device lock |
 | `sdl-dusklight-sfa-nx-shoulders.patch` | once, by hand | L/R as shoulders, ZL/ZR as triggers |
+| `sdl-dusklight-sfa-nx-rumble.patch` | once, by hand | Controller rumble (HD rumble) and the menu's Rumble switch |
 | `tracy-switch-platform.patch` | `switch/cmake/Graphics.cmake`, if Tracy is fetched | Switch guards for Tracy |
 
 `dawn-switch-renderdoc.patch` is applied by hand as one edit (switch/README.md). Each SFA-NX patch starts
@@ -45,6 +46,7 @@ Dusklight patches target `ref/SDL-dusklight`; the legacy patch targets `ref/SDL`
 | [sdl-dusklight-switch.patch](sdl-dusklight-switch.patch) | Dusklight Switch video, audio, and joystick backend |
 | [sdl-dusklight-melee-nx.patch](sdl-dusklight-melee-nx.patch) | External graphics, four-player input, analog triggers, sideways Joy-Cons, and audio handling |
 | [sdl-dusklight-sfa-nx-shoulders.patch](sdl-dusklight-sfa-nx-shoulders.patch) | L/R report as shoulders and ZL/ZR as the triggers |
+| [sdl-dusklight-sfa-nx-rumble.patch](sdl-dusklight-sfa-nx-rumble.patch) | Rumble on handheld, Joy-Cons and the Pro Controller; `SDL_SWITCH_RUMBLE` hint turns it off |
 
 ## Aurora
 

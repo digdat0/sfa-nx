@@ -1,0 +1,114 @@
+SFA-NX (applied once to ref/SDL-dusklight after sdl-dusklight-sfa-nx-shoulders.patch, see switch/README.md):
+HD rumble for handheld, Joy-Cons and the Pro Controller (libnx hidSendVibrationValues), and the
+SDL_SWITCH_RUMBLE hint the minus menu sets to 0 to silence it (switch/src/switch_menu.cpp).
+
+diff --git a/src/joystick/switch/SDL_sysjoystick.c b/src/joystick/switch/SDL_sysjoystick.c
+--- a/src/joystick/switch/SDL_sysjoystick.c
++++ b/src/joystick/switch/SDL_sysjoystick.c
+@@ -57,6 +57,20 @@ struct joystick_hwdata
+     u64 previous_buttons;
+ };
+ 
++// Rumble (SFA-NX): libnx HD rumble. Each slot keeps the vibration handles of the controller style it was
++// set up for; a style change (handheld <-> Joy-Cons, a single Joy-Con, a Pro Controller) sets them up
++// again. GameCube pads (ERM motor, separate libnx command) are left out.
++typedef struct
++{
++    u32 style;                            // HidNpadStyleTag the handles belong to, 0 none yet
++    int count;                            // 2 motors (handheld, dual Joy-Cons, Pro), 1 (single Joy-Con)
++    HidVibrationDeviceHandle handles[2];
++} SWITCH_RumbleSlot;
++static SWITCH_RumbleSlot g_rumble[SWITCH_MAX_PLAYERS];
++
++// Hint the app sets to "0" to silence rumble (SFA-NX's minus menu, switch_menu.cpp). Unset or "1" = on.
++#define SWITCH_HINT_RUMBLE "SDL_SWITCH_RUMBLE"
++
+ static PadState g_pads[SWITCH_MAX_PLAYERS];
+ static bool g_connected[SWITCH_MAX_PLAYERS];
+ static SDL_JoystickID g_instance_ids[SWITCH_MAX_PLAYERS];
+@@ -101,6 +115,7 @@ static bool SWITCH_JoystickInit(void)
+ {
+     SDL_zeroa(g_connected);
+     SDL_zeroa(g_instance_ids);
++    SDL_zeroa(g_rumble);
+     g_next_instance_id = 1;
+ 
+     padConfigureInput(SWITCH_MAX_PLAYERS, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadGc |
+@@ -193,12 +208,76 @@ static bool SWITCH_JoystickOpen(SDL_Joystick *joystick, int device_index)
+     joystick->nbuttons = NB_BUTTONS;
+     joystick->naxes = 6; // left/right sticks plus analog-compatible L/R triggers
+     joystick->nhats = 0;
++    // Rumble works for every style but the GameCube pad (SWITCH_JoystickRumble); Aurora reads this capability.
++    SDL_SetBooleanProperty(SDL_GetJoystickProperties(joystick), SDL_PROP_JOYSTICK_CAP_RUMBLE_BOOLEAN, true);
+     return true;
+ }
+ 
++// The controller style a slot's pad shows now, as the single tag hidInitializeVibrationDevices wants
++// (0: none or a GameCube pad, no HD rumble).
++static u32 SWITCH_RumbleStyle(PadState *pad, int *count)
++{
++    const u32 styles = padGetStyleSet(pad);
++    static const u32 two_motors[] = { HidNpadStyleTag_NpadHandheld, HidNpadStyleTag_NpadFullKey,
++                                      HidNpadStyleTag_NpadJoyDual };
++    for (int i = 0; i < (int)SDL_arraysize(two_motors); ++i) {
++        if (styles & two_motors[i]) {
++            *count = 2;
++            return two_motors[i];
++        }
++    }
++    if (styles & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight)) {
++        *count = 1;
++        return (styles & HidNpadStyleTag_NpadJoyLeft) ? HidNpadStyleTag_NpadJoyLeft : HidNpadStyleTag_NpadJoyRight;
++    }
++    return 0;
++}
++
++// SDL's two motor strengths (0-65535) as HD rumble: the low motor at 160 Hz, the high one at 320 Hz (the
++// frequencies libnx's own example and most games use), the same on both sides of the controller. SDL stops a
++// rumble itself when its duration ends by calling this with 0, 0.
+ static bool SWITCH_JoystickRumble(SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
+ {
+-    return SDL_Unsupported();
++    if (!joystick->hwdata) {
++        return SDL_Unsupported();
++    }
++    const int slot = joystick->hwdata->slot;
++    PadState *pad = &g_pads[slot];
++    SWITCH_RumbleSlot *r = &g_rumble[slot];
++
++    int count = 0;
++    const u32 style = SWITCH_RumbleStyle(pad, &count);
++    if (style == 0) {
++        return SDL_Unsupported();
++    }
++    if (style != r->style) {
++        // Slot 0 is player 1 or the console in handheld mode (padInitialize in SWITCH_JoystickInit).
++        const HidNpadIdType id = style == HidNpadStyleTag_NpadHandheld ? HidNpadIdType_Handheld
++                                                                       : (HidNpadIdType)(HidNpadIdType_No1 + slot);
++        r->style = 0;
++        if (R_FAILED(hidInitializeVibrationDevices(r->handles, count, id, (HidNpadStyleTag)style))) {
++            return SDL_SetError("hidInitializeVibrationDevices failed");
++        }
++        r->style = style;
++        r->count = count;
++    }
++
++    // The minus menu's Rumble off: send silence instead (also stops a rumble already running).
++    if (!SDL_GetHintBoolean(SWITCH_HINT_RUMBLE, true)) {
++        low_frequency_rumble = high_frequency_rumble = 0;
++    }
++    HidVibrationValue values[2];
++    for (int i = 0; i < r->count; ++i) {
++        values[i].amp_low = low_frequency_rumble / 65535.0f;
++        values[i].freq_low = 160.0f;
++        values[i].amp_high = high_frequency_rumble / 65535.0f;
++        values[i].freq_high = 320.0f;
++    }
++    if (R_FAILED(hidSendVibrationValues(r->handles, values, r->count))) {
++        r->style = 0; // set the handles up again next time (controller changed under us)
++        return SDL_SetError("hidSendVibrationValues failed");
++    }
++    return true;
+ }
+ 
+ static bool SWITCH_JoystickRumbleTriggers(SDL_Joystick *joystick, Uint16 left_rumble, Uint16 right_rumble)

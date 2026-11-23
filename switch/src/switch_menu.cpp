@@ -70,6 +70,10 @@ bool sShowFps = false;
 // box covers the health bar). The profiler itself runs the same either way (GPU timing, profile dumps).
 bool sProfCompact = false;
 bool sInvertLook = false;
+// Rumble (switch_menu.ini rumble): off silences the controller's vibration. The game still decides when to
+// rumble (its own option too); this only gates the Switch SDL driver through its SDL_SWITCH_RUMBLE hint
+// (switch/patches/sdl-dusklight-sfa-nx-rumble.patch). Applies at once.
+bool sRumble = true;
 bool sLoaded;
 bool sGpuBoost = false;
 int sCompression = 0;
@@ -106,6 +110,7 @@ constexpr Translation kTranslations[] = {
                         "CONFIGURACIÓN DE BOTONES"}},
     {"Show FPS", {"Afficher les FPS", "FPS anzeigen", "Mostra FPS", "Mostrar FPS"}},
     {"Invert Look", {"Inverser la caméra", "Kamera invertieren", "Inverti visuale", "Invertir cámara"}},
+    {"Rumble", {"Vibration", "Vibration", "Vibrazione", "Vibración"}},
     {"HD Textures", {"Textures HD", "HD-Texturen", "Texture HD", "Texturas HD"}},
     {"Docked Resolution", {"Résolution (TV)", "Auflösung (TV)", "Risoluzione (TV)", "Resolución (TV)"}},
     {"Widescreen HUD", {"HUD écran large", "Breitbild-HUD", "HUD widescreen", "HUD panorámico"}},
@@ -230,6 +235,7 @@ float sFps;
 enum Item {
     kItemFps,
     kItemInvertLook,
+    kItemRumble,  // controller vibration on/off (apply_rumble); applies at once
     kItemProfiler,
     kItemThreads,
     kItemAudio,
@@ -256,7 +262,7 @@ enum Item {
     kItemCount
 };
 
-constexpr int kGameItems[] = {kItemFps,     kItemInvertLook, kItemHdTextures, kItemDockedRes, kItemHudAspect, kItemLanguage,
+constexpr int kGameItems[] = {kItemFps,     kItemInvertLook, kItemRumble, kItemHdTextures, kItemDockedRes, kItemHudAspect, kItemLanguage,
                               kItemMapping, kItemShaderPack, kItemUpdate,    kItemExtraLog,  kItemClose};
 constexpr int kDebugItems[] = {kItemProfiler,    kItemThreads, kItemAudio, kItemOverlap,     kItemFrameStep,
                                kItemPacing,      kItemRenderer, kItemGpuClock, kItemCompression, kItemZcull,
@@ -266,6 +272,7 @@ constexpr const char* kTabNames[2] = {"Game", "Debug"};
 extern "C" void sfaUpdaterStatus(char* out, size_t size);
 extern "C" int sfaUpdaterState(int* percent, char* tag, size_t tagSize);
 extern "C" const char* sfaUpdaterVersion(void);
+extern "C" const char sfa_nx_build_stamp[];  // main_sfa.cpp: __DATE__ " " __TIME__ of this build (footer)
 extern "C" void sfaUpdaterActivate(void);
 extern "C" void sfaUpdaterOfferShaders(void);
 extern "C" unsigned sfaShaderDbVersion(void);  // shaderdb_switch.cpp: installed database version, 0 none
@@ -620,6 +627,23 @@ void log_clocks(const char* when) {
 }
 
 // Applies the GPU clock setting (called at startup and when the option changes).
+// Passes the Rumble setting to the Switch SDL driver. Turning it off also stops a rumble already running on
+// every open controller (the driver sends silence while the hint is 0).
+void apply_rumble() {
+    SDL_SetHint("SDL_SWITCH_RUMBLE", sRumble ? "1" : "0");
+    if (!sRumble) {
+        int count = 0;
+        SDL_JoystickID* ids = SDL_GetGamepads(&count);
+        for (int i = 0; ids != nullptr && i < count; ++i) {
+            if (SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i])) {
+                SDL_RumbleGamepad(pad, 0, 0, 0);
+            }
+        }
+        SDL_free(ids);
+    }
+    std::printf("[sfa-nx] rumble: %s\n", sRumble ? "on" : "off");
+}
+
 void apply_gpu_clock() {
     if (!sApmReady) {
         sApmReady = R_SUCCEEDED(apmInitialize());
@@ -704,6 +728,8 @@ void load_settings() {
             sZcull = value != 0;
         } else if (std::sscanf(line, "texture_bc1=%d", &value) == 1) {
             sTexBc1 = value != 0;
+        } else if (std::sscanf(line, "rumble=%d", &value) == 1) {
+            sRumble = value != 0;
         } else if (std::sscanf(line, "hd_textures=%d", &value) == 1) {
             sHdTextures = value != 0;
         } else if (std::sscanf(line, "hud_aspect=%d", &value) == 1) {
@@ -755,6 +781,7 @@ void load_settings_done() {
     sBootShaderPack = sShaderPack;
     sBootLanguage = sLanguage;
     apply_gpu_clock();
+    apply_rumble();
     aurora_switch_set_docked_res(sDockedRes);  // the renderer read the same ini value at start
 }
 
@@ -774,6 +801,7 @@ void save_settings() {
         return;
     }
     std::fprintf(f, "fps=%d\ninvert_look=%d\n", sShowFps ? 1 : 0, sInvertLook ? 1 : 0);
+    std::fprintf(f, "# rumble: 1 controller vibration on, 0 off\nrumble=%d\n", sRumble ? 1 : 0);
     std::fprintf(f, "# threads: 3 tuned, 4 game, 2 split, 0 baseline\nthreads=%d\naudio_thread=%d\n",
                  melee_nx_perf_affinity(), fhAIThreaded());
     std::fprintf(f, "frame_overlap=%d\n", aurora_frame_overlap() ? 1 : 0);
@@ -903,6 +931,9 @@ void toggle(int item, int direction) {
         sHdTextures = !sHdTextures;
     } else if (item == kItemShaderPack) {
         sShaderPack = !sShaderPack;
+    } else if (item == kItemRumble) {
+        sRumble = !sRumble;
+        apply_rumble();
     } else if (item == kItemDockedRes) {
         // 720p -> 900p -> 1080p (A and Right forward, Left back); the renderer follows at once.
         sDockedRes = (sDockedRes + (direction < 0 ? 2 : 1)) % 3;
@@ -1401,6 +1432,13 @@ void draw_panel(const char* title, const char* tabs, const PanelRow* rows, int r
             x += font * 0.15f;
         }
     }
+
+    // Version and build in the footer's right corner, "v1.1.0 1838": the build is the HHMM of the build stamp
+    // ("Nov 22 2026 18:38:12"), the same name as this NRO's debug/SFA-NX-HHMM.elf, so bug reports name both.
+    char version[32];
+    std::snprintf(version, sizeof(version), "v%s %.2s%.2s", sfaUpdaterVersion(), sfa_nx_build_stamp + 12,
+                  sfa_nx_build_stamp + 15);
+    shadow_text(list, font, ImVec2(i1.x - pad - text_width(font, version), cy - font * 0.5f), kInfoText, version);
 }
 
 // The Updates row's text in the menu language. The fixed states are formatted here from the updater's state,
@@ -1498,13 +1536,13 @@ void draw_menu() {
         return;
     }
     // Title Case like the game's own menus.
-    const char* labels[kItemCount] = {"Show FPS",      "Invert Look",   "Profiler",
+    const char* labels[kItemCount] = {"Show FPS",      "Invert Look",   "Rumble",        "Profiler",
                                       "Threads",       "Audio Thread",         "Frame Overlap", "Frame Step",
                                       "Pacing",        "Renderer",
                                       "GPU Clock",     "Render Compression",   "Z-Cull",        "Texture BC1",   "HD Textures",   "Docked Resolution", "Widescreen HUD",
                                       "Language",      "Button Mapping", "Shader Tour",         "Clear Shader Cache", "Shader Pack", "Updates",        "Extra Logging",
                                       "Restart",       "Close"};
-    const bool values[kItemCount] = {sShowFps, sInvertLook, sfaProfEnabled() != 0, false,
+    const bool values[kItemCount] = {sShowFps, sInvertLook, sRumble, sfaProfEnabled() != 0, false,
                                      fhAIThreaded() != 0, aurora_frame_overlap(), sWholeSteps, false, false,
                                      false, false, sZcull,
                                      sTexBc1, sHdTextures, false, fhHudAspectEnabled() != 0, false, false, false, false,
