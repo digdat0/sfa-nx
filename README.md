@@ -13,22 +13,34 @@ Note: This is an AI assisted project.
 ## Getting started
 
 1. You need a Switch running custom firmware (Atmosphère) and the Homebrew Menu.
-2. Download `SFA-NX.nro` from the [latest release](https://github.com/digdat0/sfa-nx/releases/latest).
-3. Copy it to `sdmc:/switch/SFA-NX/` on your SD card.
+2. Download `SFA-NX.nro` from the [latest release](https://github.com/digdat0/sfa-nx/releases/latest), and
+   the shader pack `sfa-shaderdb.bin` from the [shaderdb release](https://github.com/digdat0/sfa-nx/releases/tag/shaderdb).
+3. Copy both to `sdmc:/switch/SFA-NX/` on your SD card. The shader pack is optional: without it, SFA-NX offers
+   to download it at the first start.
 4. Copy your disc image into the same folder. Any file name works, but it must be an `.iso`, `.gcm`
    or `.rvz` (Dolphin's compressed format, about a third of the size). Convert `.ciso` with Dolphin
    first. If both an `.iso` and an `.rvz` are there, the `.iso` is used.
 5. Start SFA-NX from the Homebrew Menu, opened by holding **R** while launching a game (title takeover).
    Applet mode (from the Album) does not have enough memory.
 
-The first start takes longer while shaders are prepared. Save from the game's own menu.
+Save from the game's own menu.
 
-### Precompiled shaders
+### Shader pack
 
-SFA-NX ships with about 1,000 precompiled shaders built into the `.nro`, collected from test play on the Switch and
-in Ryujinx. When the game meets a shader that isn't in that set, it compiles it on the spot, which can cause a
-short stutter the first time you enter an area or see an effect. Each new shader is saved in the `cache/`
-folder, so it only happens once.
+The shader pack, `sfa-shaderdb.bin`, holds about 1,300 precompiled shaders and the list of graphics states the
+game uses, collected from test play on the Switch and the PC version, and from tours in Ryujinx. When the
+game meets a shader that isn't in the pack, it compiles it on the spot, which can cause a short stutter the
+first time you enter an area or see an effect. Each new shader is saved in the `cache/` folder, so it only
+happens once.
+
+- **First start:** a pack next to the `.nro` is moved into `cache/shaderdb/` and unpacked. Without one, SFA-NX
+  offers to download it (**Download**, **Not now**, or **Don't ask again**).
+- **Updates:** the pack has its own version and is updated separately from the `.nro`. **−** → **Updates** checks
+  for both; a new pack is used from the next start.
+- **Your own shaders stay yours.** The pack is added to the shaders your console compiled; an update replaces only
+  the pack, never your own (`cache/deko/`, `cache/pipeline_cache_deko.db`).
+- **−** → **Shader Pack** shows the installed version and turns the pack off, for example to test with only your
+  own shaders. Deleting `cache/` costs only slower first loads.
 
 You can help everyone get a smoother first play: after a long session or reaching new areas, share your cache.
 
@@ -46,7 +58,8 @@ sdmc:/switch/SFA-NX/
 ├── SFA-NX.nro
 ├── Star Fox Adventures.iso   (your disc image, or Star Fox Adventures.rvz)
 ├── config/                   settings
-├── cache/                    shaders
+├── sfa-shaderdb.bin          shader pack (moved into cache/shaderdb/ at the first start)
+├── cache/                    shaders: shaderdb/ (the pack), deko/ (compiled on your console)
 ├── user/                     saves
 ├── logs/                     log files
 └── mods/
@@ -66,7 +79,8 @@ Press **−** in game to open the options menu.
 | **Widescreen HUD** | **Corrected** (default) keeps the HUD, icons and menus at their original shape in 16:9; **Stretched** shows them stretched to the screen's width, as the original game does. |
 | **Language** | The game's language (see [Languages](#languages)). Applies at the next start. |
 | **Button Mapping** | Remaps the controls. **Reset To Defaults** restores the GameCube layout. |
-| **Updates** | Checks GitHub for a newer release (see [Updates](#updates)). |
+| **Shader Pack** | Shows the installed shader pack's version; turns it off or on (see [Shader pack](#shader-pack)). Applies at the next start. |
+| **Updates** | Checks GitHub for a newer release and shader pack (see [Updates](#updates)). |
 | **Extra Logging** | Writes more detail to the log for bug reports (see [Reporting a problem](#reporting-a-problem)). |
 
 Settings are saved at once. When a change needs a restart, a **Restart** row appears at the bottom of the menu.
@@ -90,9 +104,9 @@ Logging off again afterwards.
 
 ## Updates
 
-Open **−** → **Updates** and press **A** to check GitHub for a newer release. If one is available, press **A**
-to download it, then **A** again to restart into the new version. Your saves, settings and mods are kept.
-The console needs an internet connection.
+Open **−** → **Updates** and press **A** to check GitHub for a newer release and a newer shader pack. If either
+is available, press **A** to download it, then **A** again to restart into the new version. Your saves,
+settings, mods and your own shaders are kept. The console needs an internet connection.
 
 ## HD textures
 

@@ -40,9 +40,8 @@ extern "C" int aurora_main(int argc, char** argv); // src/main.c (aurora/main.h 
 extern "C" void melee_nx_ensure_controller(void); // input_switch.cpp
 extern "C" void sfaUpdaterSetNroPath(const char* path);
 extern "C" void sfaUpdaterApplyPending(void);
+extern "C" void sfaShaderDbPrepare(void);  // shaderdb_switch.cpp
 extern "C" int sfaSwitchMenuIniValue(const char* key, int def);  // switch_menu.cpp
-// True when the NRO's RomFS mounted; the shader seeds are then read from romfs: instead of the SD card.
-static bool g_romfs = false;
 // True when the disc is the PAL one (GSAP01), the only one with French, German, Italian and Spanish text.
 static bool g_disc_pal = false;
 // For the - menu's Language line.
@@ -507,10 +506,8 @@ extern "C" int main(int argc, char** argv) {
     // versions and from a finished update before anything else opens files in the app folder.
     sfaUpdaterSetNroPath(argc > 0 ? argv[0] : nullptr);
     sfaUpdaterApplyPending();
-    // RomFS holds the shipped shader and pipeline seeds (switch/seed, packed by CMake). A missing RomFS is
-    // not fatal: the seeds then come from the SD folder, and without them the first start is just slower.
-    g_romfs = R_SUCCEEDED(romfsInit());
-    melee_boot_trace("02 romfs %s", g_romfs ? "ok" : "missing");
+    // No RomFS: the NRO has none since the shader seeds moved to the shader database (shaderdb_switch.cpp).
+    // Not even a mount attempt: Ryujinx aborts on romfsInit for an NRO without RomFS.
     // Look next to the NRO first, then in the default folder.
     std::string disc = find_disc(nro_directory(argc, argv));
     if (disc.empty()) {
@@ -543,10 +540,10 @@ extern "C" int main(int argc, char** argv) {
     mkdir(SFA_DIR "/mods/hd", 0777);
     setenv("FOXHOLLOW_USER_DIR", SFA_DIR "/user", 0);
     setenv("FOXHOLLOW_CACHE_DIR", SFA_DIR "/cache", 0);
-    // Aurora's resources path, where it looks for the shipped pipeline seed initial_pipeline_cache.db. With
-    // RomFS mounted that is romfs: (the file is read in place, never copied to the SD card); otherwise the
-    // app folder, so a seed copied there by hand still works.
-    setenv("FOXHOLLOW_SHADER_CACHE", g_romfs ? "romfs:" : SFA_DIR, 0);
+    // The shader database (sfa-shaderdb.bin): installs a newer download or app-folder copy, unpacks it to
+    // cache/shaderdb/ and points the renderer there: SFA_SHADER_SEED for the compiled shaders and Aurora's
+    // resources path FOXHOLLOW_SHADER_CACHE for the pipeline recipes (initial_pipeline_cache.db).
+    sfaShaderDbPrepare();
     setenv("FOXHOLLOW_DISC", disc.c_str(), 1);
     // Game text language. Foxhollow runs the USA code, which has no language menu and reads the language
     // only from FOXHOLLOW_LANGUAGE (port/src/foxhollow_config.c), so the PAL disc's other languages need

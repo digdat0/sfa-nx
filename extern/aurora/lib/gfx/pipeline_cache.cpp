@@ -25,7 +25,16 @@
 #include <variant>
 #include <thread>
 #ifdef __SWITCH__
+#include <chrono>
+#include <cstdlib>
 extern "C" void melee_nx_perf_background_thread(const char* name);
+// SFA-NX: the shader pack's recipes unpacked into memory (switch/src/shaderdb_switch.cpp; nullptr when
+// the pack is off or missing) and the deko3d boot screen (switch/deko/device.cpp) that shows the progress.
+// Weak: a build without them falls back to Aurora's own seed file.
+extern "C" void* sfaShaderDbRecipes(size_t* size, void (*progress)(float fraction, void* user), void* user)
+    __attribute__((weak));
+extern "C" void aurora_switch_dk_boot_screen(const char* title, float fraction, const char* detail,
+                                             const char* hint) __attribute__((weak));
 #endif
 
 #include <SDL3/SDL_iostream.h>
@@ -619,6 +628,14 @@ static void seed_pipeline_cache() {
   if (g_pipelineCacheBroken || g_pipelineCacheDb == nullptr || g_pipelineCacheUpsertStmt == nullptr) {
     return;
   }
+#ifdef __SWITCH__
+  // SFA-NX: the shader pack's recipes are read from memory at every start (load_pack_recipes) and never
+  // merged into the player's database: merging 9.5k rows wrote 39 MB to the SD card (~32 s at the first
+  // start, ~6 s at every later one).
+  if (sfaShaderDbRecipes != nullptr) {
+    return;
+  }
+#endif
 
   const auto seedPath = pipeline_cache_seed_path();
   sqlite3* seedDb = open_pipeline_cache_seed_db(seedPath);
@@ -1055,6 +1072,133 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
   return acceptedRows;
 }
 
+#ifdef __SWITCH__
+namespace {
+// SFA-NX: the boot screen while the shader pack's recipes load. Each frame waits for the display, so it
+// is redrawn at most ten times a second (and always at the end, fraction 1).
+struct PackProgress {
+  std::chrono::steady_clock::time_point last{};
+  void show(float fraction, const char* detail) {
+    if (aurora_switch_dk_boot_screen == nullptr) {
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (fraction < 1.0f && last.time_since_epoch().count() != 0 && now - last < std::chrono::milliseconds(100)) {
+      return;
+    }
+    last = now;
+    // the boot font has capitals, digits and a few signs only (switch/deko/pattern.cpp)
+    aurora_switch_dk_boot_screen("STARFOX ADVENTURES LOADING", fraction, detail, "PREPARING THE SHADER PACK");
+  }
+};
+
+// Share of the bar for unpacking the recipes; reading them fills the rest.
+constexpr float PackUnpackShare = 0.6f;
+
+// Reads one shader type's recipes from the pack's in-memory database into the known pipelines, like
+// load_pipeline_cache_entries does from the player's, but never written to the player's database
+// (persist false). `done` / `total` drive the bar.
+template <typename PipelineConfig>
+size_t load_pack_entries(sqlite3* db, ShaderType type, uint32_t configVersion, PackProgress& progress, size_t& done,
+                         size_t total) {
+  sqlite3_stmt* stmt = nullptr;
+  if (sqlite3_prepare_v2(db,
+                         "SELECT config, first_frame_used FROM pipeline_cache "
+                         "WHERE type = ? AND config_version = ? ORDER BY first_frame_used ASC, rowid ASC",
+                         -1, &stmt, nullptr) != SQLITE_OK) {
+    Log.warn("Failed to read shader pack recipes: {}", sqlite3_errmsg(db));
+    return 0;
+  }
+  sqlite3_bind_int(stmt, 1, underlying(type));
+  sqlite3_bind_int(stmt, 2, static_cast<int>(configVersion));
+  size_t accepted = 0;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const auto* configBlob = static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 0));
+    const auto configSize = sqlite3_column_bytes(stmt, 0);
+    const auto firstFrameUsed = static_cast<uint32_t>(sqlite3_column_int64(stmt, 1));
+    ++done;
+    if (configSize != static_cast<int>(sizeof(PipelineConfig)) || (configSize != 0 && configBlob == nullptr)) {
+      continue;
+    }
+    PipelineConfig config;
+    std::memcpy(&config, configBlob, sizeof(config));
+    if (config.version != configVersion) {
+      continue;
+    }
+    remember_pipeline_config(type, config, firstFrameUsed, false);
+    ++accepted;
+    if (total > 0 && (done & 255) == 0) {
+      const auto text = fmt::format("RECIPES {}/{}", done, total);
+      progress.show(PackUnpackShare + (1.0f - PackUnpackShare) * float(done) / float(total), text.c_str());
+    }
+  }
+  sqlite3_finalize(stmt);
+  return accepted;
+}
+
+// SFA-NX: the shader pack's recipes, unpacked into memory by shaderdb_switch.cpp and opened there as a
+// read-only SQLite database (sqlite3_deserialize: no file, nothing written to the SD card). Their
+// pipelines are queued like the player's; a recipe the player's database also has is remembered once.
+size_t load_pack_recipes() {
+  if (sfaShaderDbRecipes == nullptr) {
+    return 0;
+  }
+  PackProgress progress;
+  progress.show(0.0f, "UNPACKING RECIPES");
+  const auto t0 = std::chrono::steady_clock::now();
+  size_t size = 0;
+  void* data = sfaShaderDbRecipes(
+      &size,
+      [](float fraction, void* user) {
+        static_cast<PackProgress*>(user)->show(PackUnpackShare * fraction, "UNPACKING RECIPES");
+      },
+      &progress);
+  if (data == nullptr) {
+    return 0;
+  }
+  sqlite3* db = nullptr;
+  size_t accepted = 0, total = 0, done = 0;
+  bool opened = sqlite3_open_v2(":memory:", &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_PRIVATECACHE, nullptr) ==
+                    SQLITE_OK &&
+                sqlite3_deserialize(db, "main", static_cast<unsigned char*>(data), static_cast<sqlite3_int64>(size),
+                                    static_cast<sqlite3_int64>(size), SQLITE_DESERIALIZE_READONLY) == SQLITE_OK;
+  bool schemaMatch = false;
+  if (opened) {
+    const auto schemaQuery = fmt::format("SELECT 1 FROM aurora_schema WHERE value = {}", PipelineCacheSchema);
+    sqlite::exec(db, schemaQuery.c_str(), [&schemaMatch](int, char**, char**) { schemaMatch = true; });
+    sqlite::exec(db, "SELECT COUNT(*) FROM pipeline_cache", [&total](int count, char** values, char**) {
+      if (count > 0 && values[0] != nullptr) {
+        total = std::strtoull(values[0], nullptr, 10);
+      }
+    });
+  }
+  if (!opened) {
+    Log.warn("Failed to open the shader pack recipes ({} bytes): {}", size, db ? sqlite3_errmsg(db) : "no memory");
+  } else if (!schemaMatch) {
+    Log.warn("Shader pack recipes do not use pipeline cache schema {}: not used", PipelineCacheSchema);
+  } else {
+#ifdef AURORA_ENABLE_RMLUI
+    accepted += load_pack_entries<rmlui::PipelineConfig>(db, ShaderType::Rml, rmlui::RmlPipelineConfigVersion,
+                                                         progress, done, total);
+#endif
+    accepted += load_pack_entries<clear::PipelineConfig>(db, ShaderType::Clear, clear::ClearPipelineConfigVersion,
+                                                         progress, done, total);
+    accepted +=
+        load_pack_entries<gx::PipelineConfig>(db, ShaderType::GX, gx::GXPipelineConfigVersion, progress, done, total);
+  }
+  if (db != nullptr) {
+    sqlite3_close(db);  // before the buffer goes: the database reads it in place
+  }
+  std::free(data);
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+  Log.info("Shader pack: {} of {} recipes loaded from memory ({} KiB unpacked) in {} ms", accepted, total, size >> 10,
+           ms);
+  progress.show(1.0f, "STARTING THE GAME");
+  return accepted;
+}
+} // namespace
+#endif
+
 static size_t load_pipeline_cache() {
   if (!prepare_pipeline_cache_db()) {
     return 0;
@@ -1065,6 +1209,10 @@ static size_t load_pipeline_cache() {
   }
 
   size_t acceptedRows = 0;
+#ifdef __SWITCH__
+  // SFA-NX: the shader pack's recipes first, then the player's own (load_pack_recipes).
+  acceptedRows += load_pack_recipes();
+#endif
 #ifdef AURORA_ENABLE_RMLUI
   acceptedRows += load_pipeline_cache_entries<rmlui::PipelineConfig>(ShaderType::Rml, rmlui::RmlPipelineConfigVersion);
 #endif

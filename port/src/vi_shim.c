@@ -22,7 +22,6 @@ int kartpad_end_threads(void);
 void aurora_switch_dk_release_all(void); /* switch/deko/device.cpp: frees GPU memory, queue, device */
 void sfaSwitchMenuReleaseServices(void); /* switch/src/switch_menu.cpp: closes apm and clkrst */
 void sfaUpdaterReleaseNet(void);         /* switch/src/updater_switch.cpp: closes curl and sockets */
-unsigned int romfsUnmount(const char* name); /* libnx; romfsExit() is a macro for romfsUnmount("romfs") */
 __attribute__((noreturn)) void kartpad_exit_to_loader(void);
 #endif
 
@@ -113,7 +112,6 @@ static void shutdown_and_exit(void) {
       /* Services and files left open would outlive this NRO in hbloader's process (see the function). */
       sfaSwitchMenuReleaseServices();
       sfaUpdaterReleaseNet(); /* the updater's bsd session, opened on the first update check */
-      romfsUnmount("romfs"); /* main_sfa.cpp mounted it; its NRO file handle would leak */
       kartpad_exit_to_loader();
     }
   }

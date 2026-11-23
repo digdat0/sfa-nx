@@ -47,17 +47,54 @@ bash switch/build.sh           # -> build-switch/sdcard/switch/SFA-NX/SFA-NX.nro
 
 ```text
 sdmc:/switch/SFA-NX/SFA-NX.nro
+sdmc:/switch/SFA-NX/sfa-shaderdb.bin    # the shader database (build-switch/sdcard/ has both)
 sdmc:/switch/SFA-NX/<your disc>.iso     # your own GSAE01 / GSAJ01 / GSAP01 image (.iso, .gcm or .rvz)
 ```
 
 Start it with title takeover (hold R while launching a game, then open the Homebrew Menu). The shader
-and pipeline seeds (`switch/seed/`) are packed into the NRO's RomFS. Logs are in `logs/` (`boot.txt`,
+and pipeline seeds (`switch/seed/`) are no longer inside the NRO: `build.sh` packs them into the shader database
+`sfa-shaderdb.bin` (see "Shader database" below). Logs are in `logs/` (`boot.txt`,
 `log.txt` with the last 10 runs; `extra_logging=1` in `config/switch_menu.ini` or the menu's Extra Logging adds
 the leak finder and GPU samples); saves in `user/`, settings in `config/`, shader caches in `cache/`. Not supported on
 Switch: native mod DLLs, the desktop crash handler, Wii and WIA images. GameCube RVZ (zstd) is
 decoded on the fly by `src/nod/rvz.c`.
 
 How the port works and what was optimised: [docs/SWITCH_PORT.md](../docs/SWITCH_PORT.md).
+
+## Shader database
+
+`sfa-shaderdb.bin` holds the compiled shaders (DKSH, valid for one compiler id) and Aurora's pipeline recipes
+(GX state, usable by any build: compiled on the console when no DKSH matches). Format and version rule:
+`switch/builder/make-shaderdb.py`; the game side: `switch/src/shaderdb_switch.cpp`. At start only the shaders
+are unpacked to `cache/shaderdb/` (once per version); the recipes are unpacked into memory at every start and
+read from there (Aurora's `pipeline_cache.cpp`, with a progress bar on the boot screen), never written to the
+player's `pipeline_cache_deko.db`. Merging them into it cost ~32 s at the first start and ~6 s at every later one.
+
+1. **Collect.** Copy a console's `cache/` folder, or run the Ryujinx save tour, which loads every save of a save
+   collection, captures shaders where each starts and at two far spots, and quits:
+   `py -3 switch/tools/ryujinx-save-tour.py --saves "<save collection>" --nro build-switch/sdcard/switch/SFA-NX/SFA-NX.nro`
+   (Ryujinx at `E:\ryujinx_deko3dauto`; resumable, results in its `sdcard/switch/SFA-NX/save-tour/`).
+2. **Merge** into the seed: `py -3 switch/builder/seed-caches.py switch/seed switch/seed <cache folders...>`.
+   Recipes from elsewhere (a PC Foxhollow `pipeline_cache.db`, same format) merge too: put the file in a folder
+   as `initial_pipeline_cache.db` and pass that folder.
+3. **Warm up** (when recipes came without DKSH): rebuild (so `sfa-shaderdb.bin` carries the merged recipes),
+   put it next to the NRO, and start the build in Ryujinx with `shader_warmup=1` in
+   `config/switch_menu.ini` and an empty `cache/`. It stays on the title screen while Aurora builds every
+   recipe (uam compiles each missing shader), logs `[warmup]` progress, quits when both queues are idle, and
+   leaves the new shaders in `cache/deko/dksh_local.bin`: merge that folder as in step 2. A second clean run
+   should report `0 shaders compiled`.
+4. **Pack:** `build.sh` runs `switch/builder/make-shaderdb.py build-switch/shaderdb`, which writes
+   `sfa-shaderdb.bin` and its manifest `sfa-shaderdb.json`. The version (YYYYMMDDNN) changes only when the
+   shaders or recipes do.
+5. **Publish** to the fixed `shaderdb` release (the in-app updater reads the manifest there and offers a newer
+   version to every NRO that reads its format; the same NRO can so get new shaders):
+   `gh release upload shaderdb build-switch/shaderdb/sfa-shaderdb.bin build-switch/shaderdb/sfa-shaderdb.json --clobber -R digdat0/sfa-nx`
+   (create it once with `gh release create shaderdb --title "Shader pack" --notes "..." -R digdat0/sfa-nx`,
+   then mark it not latest so the NRO check keeps reading the app releases).
+
+A build whose compiler id changed (uam, the translator, Aurora's GX config version) still uses the recipes, but
+compiles them on the console: run the tour (or merge caches) with the new build and publish a new database
+with each such NRO release.
 
 ## Repository history and Foxhollow updates
 

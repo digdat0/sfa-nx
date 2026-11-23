@@ -154,17 +154,13 @@ set(CMAKE_CXX_STANDARD_LIBRARIES "-Wl,--start-group ${MELEE_GFX_LINK_LIBS} -lstd
 set_target_properties(sfa-nx PROPERTIES OUTPUT_NAME SFA-NX)
 # Name and author shown in the homebrew menu's NRO details (the file and folder stay SFA-NX).
 nx_generate_nacp(SFA-NX.nacp NAME "Starfox Adventures" AUTHOR "digdat0" VERSION "${PROJECT_VERSION}")
-# RomFS inside the NRO: the shader and pipeline seeds (switch/seed), read in place at startup
-# (romfs:/deko/initial_dksh_cache.bin, romfs:/initial_pipeline_cache.db), so players only copy the NRO.
-# configure_file re-copies them whenever the seed files change.
-set(SFA_ROMFS "${CMAKE_CURRENT_BINARY_DIR}/romfs")
-file(MAKE_DIRECTORY "${SFA_ROMFS}/deko")
-configure_file("${CMAKE_CURRENT_LIST_DIR}/seed/initial_dksh_cache.bin" "${SFA_ROMFS}/deko/initial_dksh_cache.bin" COPYONLY)
-configure_file("${CMAKE_CURRENT_LIST_DIR}/seed/initial_pipeline_cache.db" "${SFA_ROMFS}/initial_pipeline_cache.db" COPYONLY)
+# No RomFS: the shader and pipeline seeds (switch/seed) ship as the separate shader database
+# sfa-shaderdb.bin (switch/builder/make-shaderdb.py, run by build.sh), so shaders can be updated without a
+# new NRO (switch/src/shaderdb_switch.cpp).
 # switch/icon.jpg (256x256 JPEG) is not in git (fan art of the game's cover, see .gitignore); without it the
 # NRO gets the default homebrew icon.
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/icon.jpg")
-  nx_create_nro(sfa-nx NACP SFA-NX.nacp ICON "${CMAKE_CURRENT_LIST_DIR}/icon.jpg" ROMFS "${SFA_ROMFS}")
+  nx_create_nro(sfa-nx NACP SFA-NX.nacp ICON "${CMAKE_CURRENT_LIST_DIR}/icon.jpg")
 else()
-  nx_create_nro(sfa-nx NACP SFA-NX.nacp ROMFS "${SFA_ROMFS}")
+  nx_create_nro(sfa-nx NACP SFA-NX.nacp)
 endif()

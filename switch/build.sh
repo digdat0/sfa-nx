@@ -69,4 +69,10 @@ mkdir -p debug build-switch/sdcard/switch/SFA-NX
 cp build-switch/SFA-NX.elf "debug/SFA-NX-$(date +%H%M).elf"
 cp build-switch/SFA-NX.nro build-switch/sdcard/switch/SFA-NX/
 rm -f build-switch/sdcard/switch/SFA-NX/initial_dksh_cache.bin build-switch/sdcard/switch/SFA-NX/initial_pipeline_cache.db
-ls -la build-switch/sdcard/switch/SFA-NX/SFA-NX.nro
+# The shader database beside the NRO (the seed is no longer inside it): players copy both, the game moves it
+# into cache/shaderdb/ at the first start (switch/src/shaderdb_switch.cpp). Its manifest stays in
+# build-switch/shaderdb/ for publishing to the "shaderdb" release (switch/README.md). The version only
+# changes when the seed does.
+py -3 switch/builder/make-shaderdb.py build-switch/shaderdb
+cp build-switch/shaderdb/sfa-shaderdb.bin build-switch/sdcard/switch/SFA-NX/
+ls -la build-switch/sdcard/switch/SFA-NX/SFA-NX.nro build-switch/sdcard/switch/SFA-NX/sfa-shaderdb.bin

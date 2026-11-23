@@ -1,7 +1,8 @@
 // SFA-NX's - (minus) menu, drawn with Aurora's Dear ImGui draw lists in the style of the game's own menus
 // (see "menu look" below). Two tabs, switched with L / R:
 //   Game:  Show FPS, Invert Look, HD Textures, Docked Resolution, Widescreen HUD, Language, Button Mapping,
-//          Updates.
+//          Shader Pack, Updates.
+//   A first-start offer (draw_offer) asks to download the shader pack while none is installed.
 //   Debug: (only with debug_menu=1 in switch_menu.ini, off by default) the profiler, thread placement (perf_switch.cpp policies, switched live), the audio thread
 //          (port/src/ai_shim.c), frame overlap / frame step / pacing, the renderer, GPU clock and GPU
 //          options, the shader tour and clearing the shader cache.
@@ -50,6 +51,12 @@ extern "C" int sfaShaderTourResumeWarp(void);
 extern "C" void sfaShaderTourSetResumeWarp(int warp);
 extern "C" int sfaShaderTourRoute(void);
 extern "C" void sfaShaderTourSetRoute(int route);
+extern "C" int sfaShaderTourStartHere(int hops);
+extern "C" int sfaShaderTourHereDone(void);
+extern "C" void fhRequestQuit(void);                            // port/src/foxhollow_quit.c
+// Renderer activity (as the shader tour reads it): work queued, and a running total through the pointer.
+extern "C" int swdk_shader_activity(unsigned* compiled);         // switch/deko/shaders.cpp
+extern "C" unsigned aurora_pipeline_activity(unsigned* created); // extern/aurora/lib/gfx/pipeline_cache.cpp
 extern "C" int sfaDiscIsPal(void);                            // switch/src/main_sfa.cpp
 
 namespace {
@@ -70,6 +77,11 @@ bool sZcull = false;
 bool sTexBc1 = false;
 bool sHdTextures = true;
 bool sBootHdTextures = true;
+// Shader Pack (switch_menu.ini shader_pack, read at start by shaderdb_switch.cpp): use the shader database
+// next to the player's own shaders. shader_offer 0: never show the first-start download offer.
+bool sShaderPack = true;
+bool sBootShaderPack = true;
+bool sShaderOffer = true;
 // Game text language as the game numbers it (0 English, 1 French, 2 German, 3 Italian, 5 Spanish; 4 is
 // Japanese, which only the Japanese disc uses). main_sfa.cpp passes it to the game at start as
 // FOXHOLLOW_LANGUAGE, only for the PAL disc, the one that has the other languages' text.
@@ -103,6 +115,31 @@ constexpr Translation kTranslations[] = {
     {"Button Mapping", {"Configuration des boutons", "Tastenbelegung", "Configurazione tasti",
                         "Configuración de botones"}},
     {"Updates", {"Mises à jour", "Updates", "Aggiornamenti", "Actualizaciones"}},
+    {"Shader Pack", {"Pack de shaders", "Shader-Paket", "Pacchetto shader", "Paquete de shaders"}},
+    {"Not installed", {"Non installé", "Nicht installiert", "Non installato", "No instalado"}},
+    {"New pack at next start", {"Nouveau pack au prochain lancement", "Neues Paket beim nächsten Start",
+                                "Nuovo pacchetto al prossimo avvio", "Nuevo paquete al próximo inicio"}},
+    {"SHADER PACK", {"PACK DE SHADERS", "SHADER-PAKET", "PACCHETTO SHADER", "PAQUETE DE SHADERS"}},
+    {"No shader pack is installed. Without it the game pauses", {"Aucun pack de shaders. Sans lui, le jeu marque",
+        "Kein Shader-Paket installiert. Ohne es stockt das Spiel", "Nessun pacchetto shader. Senza, il gioco si ferma",
+        "No hay paquete de shaders. Sin él, el juego se detiene"}},
+    {"briefly the first time it shows each new effect.", {"une pause la première fois qu'il montre un effet.",
+        "kurz, wenn es einen Effekt zum ersten Mal zeigt.", "un attimo la prima volta che mostra un effetto.",
+        "un momento la primera vez que muestra un efecto."}},
+    {"Download it now (about 1 MB)?", {"Le télécharger maintenant (environ 1 Mo) ?",
+        "Jetzt herunterladen (etwa 1 MB)?", "Scaricarlo ora (circa 1 MB)?", "¿Descargarlo ahora (aprox. 1 MB)?"}},
+    {"Download", {"Télécharger", "Herunterladen", "Scarica", "Descargar"}},
+    {"Not now", {"Plus tard", "Später", "Non ora", "Ahora no"}},
+    {"Don't ask again", {"Ne plus demander", "Nicht mehr fragen", "Non chiedere più", "No volver a preguntar"}},
+    {"Restart now", {"Redémarrer", "Jetzt neu starten", "Riavvia ora", "Reiniciar ahora"}},
+    {"Later", {"Plus tard", "Später", "Più tardi", "Más tarde"}},
+    {"Downloaded: used from the next start.", {"Téléchargé : utilisé au prochain lancement.",
+        "Geladen: wird ab dem nächsten Start verwendet.", "Scaricato: usato dal prossimo avvio.",
+        "Descargado: se usa desde el próximo inicio."}},
+    {"No shader pack found online.", {"Aucun pack de shaders en ligne.", "Kein Shader-Paket online gefunden.",
+        "Nessun pacchetto shader online.", "No se encontró ningún paquete en línea."}},
+    {"(Later: - menu, Updates)", {"(Plus tard : menu -, Mises à jour)", "(Später: Menü -, Updates)",
+        "(Più tardi: menu -, Aggiornamenti)", "(Más tarde: menú -, Actualizaciones)"}},
     {"Extra Logging", {"Journal détaillé", "Erweitertes Protokoll", "Log dettagliato", "Registro detallado"}},
     {"Close", {"Fermer", "Schließen", "Chiudi", "Cerrar"}},
     {"Restart", {"Redémarrer", "Neu starten", "Riavvia", "Reiniciar"}},
@@ -211,6 +248,7 @@ enum Item {
     kItemMapping,
     kItemTour,
     kItemShaderCache,
+    kItemShaderPack,  // use the shader database (shaderdb_switch.cpp); at next start
     kItemUpdate,
     kItemExtraLog,  // Extra logging (switch/src/log_switch.h): more detail in logs/log.txt for bug reports
     kItemRestart,  // only listed while a changed setting waits for a restart (see tab_items)
@@ -219,7 +257,7 @@ enum Item {
 };
 
 constexpr int kGameItems[] = {kItemFps,     kItemInvertLook, kItemHdTextures, kItemDockedRes, kItemHudAspect, kItemLanguage,
-                              kItemMapping, kItemUpdate,     kItemExtraLog,  kItemClose};
+                              kItemMapping, kItemShaderPack, kItemUpdate,    kItemExtraLog,  kItemClose};
 constexpr int kDebugItems[] = {kItemProfiler,    kItemThreads, kItemAudio, kItemOverlap,     kItemFrameStep,
                                kItemPacing,      kItemRenderer, kItemGpuClock, kItemCompression, kItemZcull,
                                kItemTexBc1,      kItemTour,    kItemShaderCache, kItemClose};
@@ -229,6 +267,9 @@ extern "C" void sfaUpdaterStatus(char* out, size_t size);
 extern "C" int sfaUpdaterState(int* percent, char* tag, size_t tagSize);
 extern "C" const char* sfaUpdaterVersion(void);
 extern "C" void sfaUpdaterActivate(void);
+extern "C" void sfaUpdaterOfferShaders(void);
+extern "C" unsigned sfaShaderDbVersion(void);  // shaderdb_switch.cpp: installed database version, 0 none
+extern "C" int sfaShaderDbPending(void);       // a downloaded database waits for the next start
 extern "C" void sfaRelaunch(void);  // switch/src/updater_switch.cpp: quits and starts this NRO again
 extern "C" void aurora_switch_set_docked_res(int value);  // switch/deko/device.cpp
 // Widescreen HUD (port/src/fh_hud_aspect.c): on draws the UI unstretched in the game's 16:9 mode, off keeps
@@ -282,6 +323,29 @@ bool sClearShaders; // the flag file exists
 int sTourAutoStart = -1;
 int sTourAutoFrames;
 bool sTourRefused;  // the last start had no player (shown on the menu line)
+// First-start offer to download the shader pack (draw_offer / update_offer): 0 hidden, 1 asking,
+// 2 checking and downloading, 3 done or failed (message; A/B close or restart). Shown once per run, a few
+// seconds after start, while no pack is installed or waiting and switch_menu.ini shader_offer is not 0.
+int sOffer;
+int sOfferRow;
+int sOfferFrames;
+bool sOfferShown;
+bool sOfferDownloadStarted;
+// Test runs (Ryujinx save tour, switch/tools/ryujinx-save-tour.py) only: switch_menu.ini
+// shader_capture=<hops> taps A until the card's save is loaded, captures shaders where it starts plus up
+// to <hops> far spots in the same map (shader_tour_switch.c capture mode), then quits the app. Read,
+// never written. -1: off.
+int sCaptureHops = -1;
+int sCaptureFrames;
+bool sCaptureStarted;
+// Test runs (Ryujinx) only: switch_menu.ini shader_warmup=1 stays on the title screen while Aurora's
+// start-up warm-up builds every pipeline recipe of the seed (each recipe without a DKSH is compiled by
+// uam and appended to dksh_local.bin), then quits once both compile queues have stayed empty for 20 s.
+// Read, never written. Builds the DKSH for recipes that came from elsewhere (e.g. PC caches).
+bool sWarmup;
+int sWarmupFrames;      // frames since start
+int sWarmupQuiet;       // frames in a row with nothing queued and no counter change
+unsigned sWarmupShaders, sWarmupPipes;  // the counters at the last frame
 
 // ---- button mapping -------------------------------------------------------------------------------------
 
@@ -652,6 +716,14 @@ void load_settings() {
             sHdTextureMb = value < 64 ? 64 : value > 1536 ? 1536 : value;
         } else if (std::sscanf(line, "shader_tour=%d", &value) == 1) {
             sTourAutoStart = value >= 0 ? value : -1;
+        } else if (std::sscanf(line, "shader_pack=%d", &value) == 1) {
+            sShaderPack = value != 0;
+        } else if (std::sscanf(line, "shader_offer=%d", &value) == 1) {
+            sShaderOffer = value != 0;
+        } else if (std::sscanf(line, "shader_capture=%d", &value) == 1) {
+            sCaptureHops = value >= 0 ? value : -1;
+        } else if (std::sscanf(line, "shader_warmup=%d", &value) == 1) {
+            sWarmup = value != 0;
         } else if (std::sscanf(line, "debug_menu=%d", &value) == 1) {
             sShowDebug = value != 0;  // shows the Debug tab (testing only)
         } else if (std::sscanf(line, "profiler=%d", &value) == 1) {
@@ -680,6 +752,7 @@ void load_settings_done() {
     sBootZcull = sZcull;
     sBootTexBc1 = sTexBc1;
     sBootHdTextures = sHdTextures;
+    sBootShaderPack = sShaderPack;
     sBootLanguage = sLanguage;
     apply_gpu_clock();
     aurora_switch_set_docked_res(sDockedRes);  // the renderer read the same ini value at start
@@ -691,7 +764,8 @@ void load_settings_done() {
 // menu marks "(restart)"), or the shader cache is set to be cleared.
 bool restart_pending() {
     return sCompression != sBootCompression || sZcull != sBootZcull || sTexBc1 != sBootTexBc1 ||
-           sHdTextures != sBootHdTextures || sLanguage != sBootLanguage || sClearShaders;
+           sHdTextures != sBootHdTextures || sLanguage != sBootLanguage || sShaderPack != sBootShaderPack ||
+           sClearShaders;
 }
 
 void save_settings() {
@@ -715,6 +789,10 @@ void save_settings() {
     std::fprintf(f, "# docked_res: render size when docked, 0 720p, 1 900p, 2 1080p\ndocked_res=%d\n", sDockedRes);
     std::fprintf(f, "# hud_aspect: in the game's 16:9 mode, 1 draws the HUD and menus unstretched, 0 stretched (original)\n"
                     "hud_aspect=%d\n", fhHudAspectEnabled());
+    std::fprintf(f, "# shader_pack: 1 use the shader pack (cache/shaderdb/) beside your own shaders, 0 only yours"
+                    " (at next start)\nshader_pack=%d\n", sShaderPack ? 1 : 0);
+    std::fprintf(f, "# shader_offer: 1 offer to download the shader pack at start while none is installed, 0 never\n"
+                    "shader_offer=%d\n", sShaderOffer ? 1 : 0);
     std::fprintf(f, "# extra_logging: 1 adds detail to logs/log.txt for bug reports (leak finder, GPU samples)\n"
                     "extra_logging=%d\n", sfa_log_extra());
     std::fprintf(f, "# language (PAL disc, at next start): 0 English, 1 French, 2 German, 3 Italian, 5 Spanish\n"
@@ -823,6 +901,8 @@ void toggle(int item, int direction) {
         sTexBc1 = !sTexBc1;
     } else if (item == kItemHdTextures) {
         sHdTextures = !sHdTextures;
+    } else if (item == kItemShaderPack) {
+        sShaderPack = !sShaderPack;
     } else if (item == kItemDockedRes) {
         // 720p -> 900p -> 1080p (A and Right forward, Left back); the renderer follows at once.
         sDockedRes = (sDockedRes + (direction < 0 ? 2 : 1)) % 3;
@@ -897,6 +977,55 @@ void update_map_page(bool a, bool b, const bool pressed[]) {
     }
 }
 
+// The shader pack offer's input. Asking: Up/Down pick Download / Not now / Don't ask again. Working: the
+// updater checks (shaders only) and the download starts by itself once it reports a pack; nothing to press.
+// Done: after a download A restarts (the pack is installed at start), B closes; otherwise A or B close.
+void update_offer(bool a, bool b, const bool* pressed) {
+    int percent = 0;
+    char tag[32];
+    const int state = sfaUpdaterState(&percent, tag, sizeof(tag));
+    if (sOffer == 1) {
+        if (pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]) {
+            sOfferRow = (sOfferRow + 2) % 3;
+        } else if (pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN]) {
+            sOfferRow = (sOfferRow + 1) % 3;
+        } else if (b) {
+            sOffer = 0;
+        } else if (a && sOfferRow == 0) {
+            sOffer = 2;
+            sOfferDownloadStarted = false;
+            std::printf("[sfa-nx] shader pack offer: download\n");
+            sfaUpdaterOfferShaders();
+        } else if (a) {
+            std::printf("[sfa-nx] shader pack offer: %s\n", sOfferRow == 2 ? "don't ask again" : "not now");
+            if (sOfferRow == 2) {
+                sShaderOffer = false;
+                save_settings();
+            }
+            sOffer = 0;
+        }
+        return;
+    }
+    if (sOffer == 2) {
+        // Updater states (updater_switch.cpp): 2 up to date, 3 available, 5 downloaded, 6 failed.
+        if (state == 3 && !sOfferDownloadStarted) {
+            sOfferDownloadStarted = true;
+            sfaUpdaterActivate();  // download
+        } else if (state == 2 || state == 5 || state == 6) {
+            sOffer = 3;
+            std::printf("[sfa-nx] shader pack offer: updater state %d\n", state);
+            sOfferRow = 0;
+        }
+        return;
+    }
+    if (state == 5 && a) {
+        save_settings();
+        sfaUpdaterActivate();  // restart into the same NRO; the next start installs the pack
+    } else if (a || b) {
+        sOffer = 0;
+    }
+}
+
 // Menu input, read straight from SDL every frame (the game's own pad input is blanked while the menu is
 // open). - toggles the menu; while a capture runs, all input goes to the capture.
 void update_input() {
@@ -919,6 +1048,10 @@ void update_input() {
     const SDL_GamepadButton a = button_labelled(pad, SDL_GAMEPAD_BUTTON_LABEL_A, SDL_GAMEPAD_BUTTON_EAST);
     const SDL_GamepadButton b = button_labelled(pad, SDL_GAMEPAD_BUTTON_LABEL_B, SDL_GAMEPAD_BUTTON_SOUTH);
 
+    if (sOffer != 0) {
+        update_offer(pressed[a], pressed[b], pressed);
+        return;
+    }
     if (pressed[SDL_GAMEPAD_BUTTON_BACK]) {
         sOpen = !sOpen;
         sSelected = 0;
@@ -1369,13 +1502,13 @@ void draw_menu() {
                                       "Threads",       "Audio Thread",         "Frame Overlap", "Frame Step",
                                       "Pacing",        "Renderer",
                                       "GPU Clock",     "Render Compression",   "Z-Cull",        "Texture BC1",   "HD Textures",   "Docked Resolution", "Widescreen HUD",
-                                      "Language",      "Button Mapping", "Shader Tour",         "Clear Shader Cache", "Updates",        "Extra Logging",
+                                      "Language",      "Button Mapping", "Shader Tour",         "Clear Shader Cache", "Shader Pack", "Updates",        "Extra Logging",
                                       "Restart",       "Close"};
     const bool values[kItemCount] = {sShowFps, sInvertLook, sfaProfEnabled() != 0, false,
                                      fhAIThreaded() != 0, aurora_frame_overlap(), sWholeSteps, false, false,
                                      false, false, sZcull,
-                                     sTexBc1, sHdTextures, false, fhHudAspectEnabled() != 0, false, false, false, false, false,
-                                     sfa_log_extra() != 0, false, false};
+                                     sTexBc1, sHdTextures, false, fhHudAspectEnabled() != 0, false, false, false, false,
+                                     sShaderPack, false, sfa_log_extra() != 0, false, false};
     PanelRow rows[kMaxPanelRows];
     int count = 0;
     const int* items = tab_items(sTab, &count);
@@ -1439,6 +1572,17 @@ void draw_menu() {
             } else {
                 std::snprintf(v, vs, "%s", T("PAL disc only"));
             }
+        } else if (i == kItemShaderPack) {
+            // "v2026112201  On", "Not installed", or a download waiting for the next start.
+            const bool pending = sShaderPack != sBootShaderPack;
+            if (sfaShaderDbPending()) {
+                std::snprintf(v, vs, "%s", T("New pack at next start"));
+            } else if (sfaShaderDbVersion() == 0) {
+                std::snprintf(v, vs, "%s", T("Not installed"));
+            } else {
+                std::snprintf(v, vs, "v%u  %s%s", sfaShaderDbVersion(), T(sShaderPack ? "On" : "Off"),
+                              pending ? T("  (restart)") : "");
+            }
         } else if (i == kItemUpdate) {
             updater_status(v, vs < 40 ? vs : 40);
         } else if (i == kItemShaderCache) {
@@ -1458,6 +1602,59 @@ void draw_menu() {
     const PanelHint hints[] = {{"B", kButtonRed, T("-Back")}, {"A", kButtonGreen, T("-Select")}};
     draw_panel(sShowDebug ? "SFA-NX OPTIONS" : tr("STAR FOX ADVENTURES OPTIONS"), sShowDebug ? tabs : nullptr, rows, count,
                hints, 2, static_cast<float>(tallest) + kGapRows);
+}
+
+// The shader pack offer (see sOffer): three lines of text, then the choices or the updater's progress.
+void draw_offer() {
+    PanelRow rows[6];
+    int n = 0;
+    int percent = 0;
+    char tag[32];
+    const int state = sfaUpdaterState(&percent, tag, sizeof(tag));
+    auto text = [&](const char* line) {
+        rows[n].info = true;
+        rows[n++].label = line;
+    };
+    auto choice = [&](const char* label, int index) {
+        rows[n].label = label;
+        rows[n].selected = sOfferRow == index;
+        rows[n].gapBefore = index == 0;
+        ++n;
+    };
+    if (sOffer == 1) {
+        text(tr("No shader pack is installed. Without it the game pauses"));
+        text(tr("briefly the first time it shows each new effect."));
+        text(tr("Download it now (about 1 MB)?"));
+        choice(tr("Download"), 0);
+        choice(tr("Not now"), 1);
+        choice(tr("Don't ask again"), 2);
+    } else if (sOffer == 2) {
+        static char line[64];
+        if (state == 4) {
+            std::snprintf(line, sizeof(line), tr("Downloading %d%%"), percent);
+        } else {
+            std::snprintf(line, sizeof(line), "%s", tr("Checking..."));
+        }
+        text(line);
+    } else if (state == 5) {
+        text(tr("Downloaded: used from the next start."));
+        choice(tr("Restart now"), 0);  // B: later
+    } else {
+        static char line[96];
+        if (state == 2) {
+            std::snprintf(line, sizeof(line), "%s", tr("No shader pack found online."));
+        } else {
+            sfaUpdaterStatus(line, sizeof(line));  // the failure, e.g. "No network"
+            const char* t = tr(line);
+            if (t != line) {
+                std::snprintf(line, sizeof(line), "%s", t);
+            }
+        }
+        text(line);
+        text(tr("(Later: - menu, Updates)"));
+    }
+    const PanelHint hints[] = {{"B", kButtonRed, tr("-Back")}, {"A", kButtonGreen, tr("-Select")}};
+    draw_panel(tr("SHADER PACK"), nullptr, rows, n, hints, 2, 0.0f);
 }
 
 } // namespace
@@ -1496,6 +1693,51 @@ extern "C" void sfaSwitchMenuFrame(void) {
             sTourAutoStart = -1;
         }
     }
+    // Capture run: start once the player has stayed loaded for 5 s, quit through the game's own exit
+    // (as Exit To Desktop) once the capture has finished.
+    if (sCaptureHops >= 0) {
+        if (!sCaptureStarted) {
+            sCaptureFrames = sfaShaderTourHasPlayer() ? sCaptureFrames + 1 : 0;
+            if (sCaptureFrames >= 5 * 60 && sfaShaderTourStartHere(sCaptureHops) != 0) {
+                sCaptureStarted = true;
+            }
+        } else if (sfaShaderTourHereDone()) {
+            sCaptureHops = -1;
+            std::printf("[capture] quitting\n");
+            fhRequestQuit();
+        }
+    }
+    // Warm-up run: after 30 s (the seed merge and the cache load are done by then), count frames in which
+    // neither the shader worker nor Aurora's pipeline queue has work and neither total moved; 20 s of that
+    // means every recipe is built. Progress is logged every 30 s.
+    if (sWarmup) {
+        unsigned shaders = 0, pipes = 0;
+        const bool busy = swdk_shader_activity(&shaders) > 0 || aurora_pipeline_activity(&pipes) > 0;
+        const bool moved = shaders != sWarmupShaders || pipes != sWarmupPipes;
+        sWarmupShaders = shaders;
+        sWarmupPipes = pipes;
+        sWarmupQuiet = busy || moved ? 0 : sWarmupQuiet + 1;
+        if (++sWarmupFrames % (30 * 60) == 0) {
+            std::printf("[warmup] %d s: %u shaders compiled, %u pipelines created%s\n", sWarmupFrames / 60,
+                        shaders, pipes, busy ? ", busy" : "");
+        }
+        if (sWarmupFrames > 30 * 60 && sWarmupQuiet >= 20 * 60) {
+            sWarmup = false;
+            std::printf("[warmup] done after %d s: %u shaders compiled, %u pipelines created\n[capture] quitting\n",
+                        sWarmupFrames / 60, shaders, pipes);
+            fhRequestQuit();
+        }
+    }
+    // The shader pack offer, once, a few seconds in (the title screen), never in test runs.
+    if (!sOfferShown && sShaderOffer && !sOpen && sCaptureHops < 0 && sTourAutoStart < 0 && !sWarmup &&
+        ++sOfferFrames > 8 * 60) {
+        sOfferShown = true;
+        if (sfaShaderDbVersion() == 0 && !sfaShaderDbPending()) {
+            sOffer = 1;
+            std::printf("[sfa-nx] shader pack offer shown (no pack installed)\n");
+            sOfferRow = 0;
+        }
+    }
     sfaShaderTourFrame();
     update_fps();
     // Small profiler: one line beside the FPS counter; full profiler: the phase box under it.
@@ -1508,6 +1750,8 @@ extern "C" void sfaSwitchMenuFrame(void) {
     }
     if (sOpen) {
         draw_menu();
+    } else if (sOffer != 0) {
+        draw_offer();
     }
 }
 
@@ -1534,7 +1778,7 @@ extern "C" void sfaSwitchMenuFilterPad(void* status) {
     }
     // Test runs only (shader_tour= in switch_menu.ini): Ryujinx has no one to press buttons, so tap A
     // through the title and file select until the save's player exists.
-    if (sTourAutoStart >= 0 && !sfaShaderTourHasPlayer()) {
+    if ((sTourAutoStart >= 0 || (sCaptureHops >= 0 && !sCaptureStarted)) && !sfaShaderTourHasPlayer()) {
         static unsigned tap;
         if (++tap > 20 * 60 && tap % 90 < 6) {
             pads[0].err = PAD_ERR_NONE;
@@ -1542,7 +1786,7 @@ extern "C" void sfaSwitchMenuFilterPad(void* status) {
         }
     }
     sLastStatus = pads[0];
-    if (!sOpen) {
+    if (!sOpen && sOffer == 0) {
         return;
     }
     for (int i = 0; i < PAD_CHANMAX; ++i) {

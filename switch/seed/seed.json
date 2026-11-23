@@ -1,41 +1,41 @@
 {
   "dksh": {
     "compiler_id": "a56565db5504fd71",
-    "shaders": 989,
+    "shaders": 1320,
     "failed": 0,
     "modules": 0,
-    "binding_records": 1276,
-    "bytes": 4642465,
-    "sha256": "7787d4dda236ce60b112637837df755a23fa832f91f9bec7865da6f911019f49",
+    "binding_records": 1607,
+    "bytes": 5824590,
+    "sha256": "e5dc2b6dbbf9bed347169884539236c4781e05bda1ca3db7d7fafe3eecb97b00",
     "inputs": [
       {
         "path": "switch/seed/initial_dksh_cache.bin",
-        "bytes": 4473611,
+        "bytes": 4717881,
         "bad_crc": 0,
         "torn_bytes": 0,
-        "mtime": 1795202745.7714972
+        "mtime": 1795392467.0163906
       },
       {
         "path": "cache/deko/dksh_local.bin",
-        "bytes": 168870,
+        "bytes": 1106725,
         "bad_crc": 0,
         "torn_bytes": 0,
-        "mtime": 1795358376.0
+        "mtime": 1795392735.194134
       }
     ]
   },
   "pipelines": {
     "schema": 1,
-    "recipes": 3130,
-    "bytes": 12959744,
+    "recipes": 9528,
+    "bytes": 39415808,
     "inputs": [
       {
         "path": "switch/seed/initial_pipeline_cache.db",
-        "recipes": 2045
+        "recipes": 9528
       },
       {
-        "path": "roms/cache/pipeline_cache_deko.db",
-        "recipes": 3130
+        "path": "SFA-NX/cache/pipeline_cache_deko.db",
+        "recipes": 9528
       }
     ]
   }

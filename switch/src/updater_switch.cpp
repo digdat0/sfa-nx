@@ -1,9 +1,18 @@
 // In-app updater, driven from the - menu's Updates row (switch_menu.cpp).
 //
 // Each press of A advances one step:
-//   idle/up to date/failed -> check: ask the GitHub API for the latest release of digdat0/sfa-nx
-//   available              -> download: fetch the release's SFA-NX.nro to cache/update.nro and verify it
-//   ready                  -> install: swap the new NRO in, ask the Homebrew loader to start it next, quit
+//   idle/up to date/failed -> check: ask the GitHub API for the latest release of digdat0/sfa-nx, and for
+//                             the fixed "shaderdb" release (the shader database, shaderdb_switch.cpp)
+//   available              -> download: fetch the release's SFA-NX.nro to cache/update.nro and/or a newer
+//                             sfa-shaderdb.bin to cache/shaderdb/sfa-shaderdb.bin.new, and verify them
+//   ready                  -> install: swap the new NRO in (if one came), ask the Homebrew loader to start
+//                             it next, quit; the shader database is installed by the next start
+//
+// The shaderdb release holds sfa-shaderdb.bin and its manifest sfa-shaderdb.json (version, format, sha256;
+// switch/builder/make-shaderdb.py). Only the small manifest is read to decide: its version must be newer
+// than the installed (or already downloaded) database and its format one this build reads. The same NRO can
+// so get newer shaders without an NRO release. sfaUpdaterOfferShaders runs the same steps for the shader
+// database only (the first-start offer in switch_menu.cpp).
 //
 // Network work runs on a detached thread so the game keeps rendering; the menu polls sfaUpdaterStatus each
 // frame. The release tag (e.g. "v0.2.0") is compared with SFA_NX_VERSION, which CMake sets from
@@ -12,6 +21,7 @@
 #include <nlohmann/json.hpp>
 #include <switch.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cstdio>
@@ -31,6 +41,12 @@ extern "C" void fhRequestQuit(void);
 #define SFA_NX_VERSION "0.0.0"
 #endif
 
+// Shader database helpers (shaderdb_switch.cpp).
+extern "C" unsigned sfaShaderDbVersion(void);
+extern "C" unsigned sfaShaderDbFileVersion(const char* path);
+extern "C" unsigned sfaShaderDbFormat(void);
+extern "C" int sfaShaderDbCheckFile(const char* path, char* why, size_t whySize);
+
 namespace {
 
 constexpr const char* kLatestUrl = "https://api.github.com/repos/digdat0/sfa-nx/releases/latest";
@@ -42,6 +58,13 @@ constexpr const char* kPartPath = "sdmc:/switch/SFA-NX/cache/update.nro";
 constexpr const char* kOldPath = "sdmc:/switch/SFA-NX/cache/previous.nro";
 constexpr const char* kTokenPath = "sdmc:/switch/SFA-NX/config/github_token";
 constexpr const char* kDefaultNro = "sdmc:/switch/SFA-NX/SFA-NX.nro";
+// The shader database's release (a fixed tag whose assets are replaced) and where its download goes: .part
+// while downloading, renamed to .new once verified, installed at the next start (shaderdb_switch.cpp).
+constexpr const char* kShaderDbUrl = "https://api.github.com/repos/digdat0/sfa-nx/releases/tags/shaderdb";
+constexpr const char* kShaderDbAsset = "sfa-shaderdb.bin";
+constexpr const char* kShaderDbManifest = "sfa-shaderdb.json";
+constexpr const char* kShaderPart = "sdmc:/switch/SFA-NX/cache/shaderdb/sfa-shaderdb.bin.part";
+constexpr const char* kShaderPending = "sdmc:/switch/SFA-NX/cache/shaderdb/sfa-shaderdb.bin.new";
 
 // Updater state machine (see the top of the file). g_state is read by the menu thread and written by the
 // worker thread, so it and the progress percentage are atomics; g_message is guarded by g_mutex.
@@ -72,6 +95,10 @@ curl_off_t g_doneSize;
 // Path of the running NRO (from argv[0]), replaced on install. Falls back to the default location.
 std::string g_nroPath = kDefaultNro;
 bool g_netReady;
+// Set by sfaUpdaterOfferShaders: this check looks at the shader database only (no NRO update).
+std::atomic<bool> g_shadersOnly{false};
+// What the last download fetched: an NRO to swap in at install.
+bool g_gotNro;
 
 // Publishes a new state and status text, and logs it.
 void set_state(int state, const std::string& message) {
@@ -187,71 +214,138 @@ bool newer(const std::string& latest, const std::string& current) {
     return false;
 }
 
-// Worker thread for "check": fetches the latest release, keeps its SFA-NX.nro asset, and decides between
-// up to date, available, or failed.
+// GETs a GitHub API URL into *body. Returns the curl result; *http gets the status code.
+CURLcode fetch(const std::string& url, const char* accept, std::string* body, long* http) {
+    curl_slist* list = headers(accept);
+    CURL* curl = make_handle(url.c_str(), list);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, to_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, body);
+    const CURLcode rc = curl_easy_perform(curl);
+    *http = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, http);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(list);
+    return rc;
+}
+
+// The asset called `name` in a release's JSON (empty url when it is missing).
+Asset find_asset(const nlohmann::json& release, const char* name) {
+    Asset asset;
+    if (!release.contains("assets") || !release["assets"].is_array()) {
+        return asset;
+    }
+    for (const auto& item : release["assets"]) {
+        if (!item.is_object() || strcasecmp(item.value("name", "").c_str(), name) != 0) {
+            continue;
+        }
+        asset.name = name;
+        // The API URL of the asset (not browser_download_url): it works with a token on a private
+        // repository when requested with Accept: application/octet-stream.
+        asset.url = item.value("url", "");
+        asset.size = item.value("size", static_cast<curl_off_t>(0));
+        if (item.contains("digest") && item["digest"].is_string()) {
+            asset.digest = item["digest"].get<std::string>();
+        }
+        break;
+    }
+    return asset;
+}
+
+// Result of one release check: 1 something newer (added to *assets), 0 nothing newer, -1 failed (*why).
+// The NRO: the latest release's tag against SFA_NX_VERSION; *label gets the tag.
+int check_nro(std::vector<Asset>* assets, std::string* label, std::string* why) {
+    std::string body;
+    long http = 0;
+    const CURLcode rc = fetch(kLatestUrl, "Accept: application/vnd.github+json", &body, &http);
+    if (rc != CURLE_OK) {
+        *why = http == 404 ? "No release found" : std::string("Check failed: ") + curl_easy_strerror(rc);
+        return -1;
+    }
+    nlohmann::json release = nlohmann::json::parse(body, nullptr, false);
+    if (!release.is_object() || !release.contains("tag_name")) {
+        *why = "Bad reply from GitHub";
+        return -1;
+    }
+    const std::string tag = release.value("tag_name", "");
+    if (!newer(tag, SFA_NX_VERSION)) {
+        return 0;
+    }
+    Asset asset = find_asset(release, kAssetName);
+    if (asset.url.empty()) {
+        *why = tag + " has no " + kAssetName;
+        return -1;
+    }
+    asset.target = g_nroPath;
+    assets->push_back(asset);
+    *label = tag;
+    return 1;
+}
+
+// The shader database: the shaderdb release's manifest against the installed (or already downloaded)
+// database. No shaderdb release at all counts as nothing newer. *label gets "Shaders <version>".
+int check_shaders(std::vector<Asset>* assets, std::string* label, std::string* why) {
+    std::string body;
+    long http = 0;
+    CURLcode rc = fetch(kShaderDbUrl, "Accept: application/vnd.github+json", &body, &http);
+    if (rc != CURLE_OK) {
+        if (http == 404) {
+            return 0;
+        }
+        *why = std::string("Shader check failed: ") + curl_easy_strerror(rc);
+        return -1;
+    }
+    nlohmann::json release = nlohmann::json::parse(body, nullptr, false);
+    Asset bin = release.is_object() ? find_asset(release, kShaderDbAsset) : Asset{};
+    const Asset manifestAsset = release.is_object() ? find_asset(release, kShaderDbManifest) : Asset{};
+    if (bin.url.empty() || manifestAsset.url.empty()) {
+        return 0;
+    }
+    std::string text;
+    rc = fetch(manifestAsset.url, "Accept: application/octet-stream", &text, &http);
+    nlohmann::json manifest = nlohmann::json::parse(text, nullptr, false);
+    if (rc != CURLE_OK || !manifest.is_object()) {
+        *why = "Bad shader manifest";
+        return -1;
+    }
+    const unsigned version = manifest.value("version", 0u);
+    const unsigned format = manifest.value("format", 0u);
+    const unsigned have = std::max(sfaShaderDbVersion(), sfaShaderDbFileVersion(kShaderPending));
+    if (format == 0 || format > sfaShaderDbFormat() || version <= have) {
+        return 0;  // nothing newer, or made for a newer SFA-NX (that NRO update brings it)
+    }
+    if (bin.digest.empty() && manifest.contains("sha256") && manifest["sha256"].is_string()) {
+        bin.digest = "sha256:" + manifest["sha256"].get<std::string>();
+    }
+    bin.target = kShaderPending;
+    assets->push_back(bin);
+    *label = "Shaders " + std::to_string(version);
+    return 1;
+}
+
+// Worker thread for "check": the NRO release (unless only shaders were asked for) and the shader database;
+// decides between up to date, available (with a label such as "v1.0.2 + shaders") or failed.
 void check_worker() {
     if (!net_init()) {
         set_state(kFailed, "No network");
         g_busy.store(false);
         return;
     }
-    std::string body;
-    curl_slist* list = headers("Accept: application/vnd.github+json");
-    CURL* curl = make_handle(kLatestUrl, list);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, to_string);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-    const CURLcode rc = curl_easy_perform(curl);
-    long http = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
-    curl_easy_cleanup(curl);
-    curl_slist_free_all(list);
-    if (rc != CURLE_OK) {
-        set_state(kFailed, http == 404 ? "No release found" : std::string("Check failed: ") + curl_easy_strerror(rc));
-        g_busy.store(false);
-        return;
-    }
-    nlohmann::json release = nlohmann::json::parse(body, nullptr, false);
-    if (!release.is_object() || !release.contains("tag_name")) {
-        set_state(kFailed, "Bad reply from GitHub");
-        g_busy.store(false);
-        return;
-    }
-    const std::string tag = release.value("tag_name", "");
     std::vector<Asset> assets;
-    bool hasNro = false;
-    if (release.contains("assets") && release["assets"].is_array()) {
-        for (const auto& item : release["assets"]) {
-            if (!item.is_object()) {
-                continue;
-            }
-            Asset asset;
-            asset.name = item.value("name", "");
-            if (strcasecmp(asset.name.c_str(), kAssetName) != 0) {
-                continue;
-            }
-            asset.target = g_nroPath;
-            hasNro = true;
-            // The API URL of the asset (not browser_download_url): it works with a token on a private
-            // repository when requested with Accept: application/octet-stream.
-            asset.url = item.value("url", "");
-            asset.size = item.value("size", static_cast<curl_off_t>(0));
-            if (item.contains("digest") && item["digest"].is_string()) {
-                asset.digest = item["digest"].get<std::string>();
-            }
-            assets.push_back(asset);
-        }
-    }
+    std::string nroLabel, nroWhy, shaderLabel, shaderWhy;
+    const int nro = g_shadersOnly.load() ? 0 : check_nro(&assets, &nroLabel, &nroWhy);
+    const int shaders = check_shaders(&assets, &shaderLabel, &shaderWhy);
+    std::string label = nro > 0 && shaders > 0 ? nroLabel + " + shaders" : nro > 0 ? nroLabel : shaderLabel;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_latest = tag;
+        g_latest = label;
         g_assets = assets;
     }
-    if (!newer(tag, SFA_NX_VERSION)) {
-        set_state(kUpToDate, "Up to date (v" SFA_NX_VERSION ")");
-    } else if (!hasNro) {
-        set_state(kFailed, tag + " has no " + kAssetName);
+    if (!assets.empty()) {
+        set_state(kAvailable, label + " available");
+    } else if (nro < 0 || shaders < 0) {
+        set_state(kFailed, nro < 0 ? nroWhy : shaderWhy);
     } else {
-        set_state(kAvailable, tag + " available");
+        set_state(kUpToDate, g_shadersOnly.load() ? "No newer shaders" : "Up to date (v" SFA_NX_VERSION ")");
     }
     g_busy.store(false);
 }
@@ -302,9 +396,11 @@ bool verify(const std::string& path, curl_off_t size, const std::string& digest,
     return true;
 }
 
-// Downloads one asset to cache/update.nro and verifies it. A failed or bad download is deleted.
+// Downloads one asset and verifies it: the NRO to cache/update.nro (swapped in by install), the shader
+// database to its .part file, renamed to .new once it checks out. A failed or bad download is deleted.
 bool download_one(const Asset& asset, std::string* why) {
-    const std::string part = kPartPath;
+    const bool nro = asset.target == g_nroPath;
+    const std::string part = nro ? kPartPath : kShaderPart;
     FILE* f = std::fopen(part.c_str(), "wb");
     if (f == nullptr) {
         *why = "Cannot write to the SD card";
@@ -325,9 +421,24 @@ bool download_one(const Asset& asset, std::string* why) {
         *why = std::string("Download failed: ") + (rc != CURLE_OK ? curl_easy_strerror(rc) : "SD write");
         return false;
     }
-    if (!verify(part, asset.size, asset.digest, asset.target == g_nroPath, why)) {
+    if (!verify(part, asset.size, asset.digest, nro, why)) {
         std::remove(part.c_str());
         return false;
+    }
+    if (!nro) {
+        char reason[96];
+        if (sfaShaderDbCheckFile(part.c_str(), reason, sizeof(reason)) == 0) {
+            std::remove(part.c_str());
+            *why = reason;
+            return false;
+        }
+        // Horizon's rename does not overwrite: drop an older download first.
+        std::remove(kShaderPending);
+        if (std::rename(part.c_str(), kShaderPending) != 0) {
+            std::remove(part.c_str());
+            *why = "Cannot write to the SD card";
+            return false;
+        }
     }
     return true;
 }
@@ -348,14 +459,17 @@ void download_worker() {
         g_totalSize += asset.size;
     }
     std::string why;
+    g_gotNro = false;
     for (const Asset& asset : assets) {
         if (!download_one(asset, &why)) {
             std::remove(kPartPath);
+            g_gotNro = false;
             set_state(kFailed, why);
             g_busy.store(false);
             return;
         }
         g_doneSize += asset.size;
+        g_gotNro = g_gotNro || asset.target == g_nroPath;
     }
     set_state(kReady, tag + " downloaded");
     g_busy.store(false);
@@ -363,11 +477,10 @@ void download_worker() {
 
 // Swaps the verified download in: the running NRO becomes cache/previous.nro and the download takes its
 // name. If the second rename fails the first is undone, so the user is never left without an NRO.
-// RomFS is closed first because it keeps the running NRO open, and Horizon cannot rename an open file.
+// (The NRO has no RomFS mounted, which would keep the running NRO open: Horizon cannot rename an open file.)
 bool install() {
     const std::string part = kPartPath;
     const std::string old = kOldPath;
-    romfsExit();
     std::remove(old.c_str());
     if (std::rename(g_nroPath.c_str(), old.c_str()) != 0) {
         return false;
@@ -391,6 +504,7 @@ extern "C" void sfaUpdaterApplyPending(void) {
     }
     std::remove(kPartPath);
     std::remove(kOldPath);
+    std::remove(kShaderPart);
 }
 
 // Records where the running NRO lives (argv[0]); only full SD card paths are accepted.
@@ -477,7 +591,7 @@ extern "C" void sfaUpdaterActivate(void) {
         set_state(kDownloading, "Downloading");
         std::thread(download_worker).detach();
     } else if (state == kReady) {
-        if (!install()) {
+        if (g_gotNro && !install()) {
             set_state(kFailed, "Could not replace SFA-NX.nro");
             return;
         }
@@ -492,8 +606,21 @@ extern "C" void sfaUpdaterActivate(void) {
         }
         fhRequestQuit();
     } else {
+        g_shadersOnly.store(false);
         g_busy.store(true);
         set_state(kChecking, "Checking");
         std::thread(check_worker).detach();
     }
+}
+
+// The first-start offer's "Download": checks the shader database only. The offer then calls
+// sfaUpdaterActivate for the download and the restart, as the Updates row does.
+extern "C" void sfaUpdaterOfferShaders(void) {
+    if (g_busy.load()) {
+        return;
+    }
+    g_shadersOnly.store(true);
+    g_busy.store(true);
+    set_state(kChecking, "Checking");
+    std::thread(check_worker).detach();
 }

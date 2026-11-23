@@ -1,6 +1,8 @@
 // The DKSH cache at start (dk.h): initial_dksh_cache.bin (the shader seed in switch/seed/, merged from
-// play sessions and shader tours by switch/builder/seed-caches.py) is shipped in the NRO's RomFS
-// (romfs:/deko/, packed by switch/CMakeLists.txt; a copy next to the NRO is the fallback). It is read
+// play sessions and shader tours by switch/builder/seed-caches.py) ships inside the shader database
+// sfa-shaderdb.bin (switch/builder/make-shaderdb.py), which switch/src/shaderdb_switch.cpp unpacks to
+// cache/shaderdb/ and names in SFA_SHADER_SEED (unset: no database, or the - menu's Shader Pack is off;
+// then only the player's own cache/deko/dksh_local.bin is used, shaders.cpp). It is read
 // whole, its compiler id checked against this build's (a stale file is ignored as a whole), and
 // every compiled shader is copied into the code block and initialized. One "[dk] shader cache:" line
 // says what came in and how long it took. The shaders go into the registry of shaders.cpp (by stage
@@ -11,6 +13,7 @@
 #include "dksh_file.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -24,7 +27,6 @@
 namespace swdk {
 namespace {
 
-constexpr const char* kCachePath = "romfs:/deko/initial_dksh_cache.bin";
 
 std::unordered_map<std::string, NamedShader> g_named;
 char g_status[160] = "not loaded";
@@ -51,11 +53,10 @@ bool read_whole(const char* path, std::vector<uint8_t>* out) {
 void shader_cache_init(uint32_t gxConfigVersion) {
     const uint64_t t0 = now_ns();
     std::vector<uint8_t> data;
-    if (!read_whole(kCachePath, &data) &&
-        !read_whole(COS_SWITCH_DATA_DIR "/initial_dksh_cache.bin", &data)) {
-        // (The message names KartPad's build scripts; in SFA-NX the seed comes from switch/seed via RomFS.)
-        dklog("shader cache: no %s: no precompiled shaders (scripts/switch/build_native.sh --renderer deko3d writes it "
-              "next to the NRO; push.sh and make_sd.sh copy it)",
+    const char* seed = getenv("SFA_SHADER_SEED");
+    const char* kCachePath = seed != nullptr && seed[0] != '\0' ? seed : "(no shader database)";
+    if (seed == nullptr || seed[0] == '\0' || !read_whole(kCachePath, &data)) {
+        dklog("shader cache: no %s: no precompiled shaders (no shader database installed, or Shader Pack off)",
               kCachePath);
         snprintf(g_status, sizeof g_status, "no initial_dksh_cache.bin");
         return;

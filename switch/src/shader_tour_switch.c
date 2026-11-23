@@ -3,7 +3,7 @@
 // quarter at a time while the renderer compiles what the map draws. It moves on once the shader compiler
 // and Aurora's pipeline queue have been idle for a while (or a time limit passes). Everything compiled
 // lands in the normal caches (cache/deko/dksh_local.bin, cache/pipeline_cache_deko.db), which
-// switch/builder/seed-caches.py merges into the seed (switch/seed/, packed into the NRO's RomFS).
+// switch/builder/seed-caches.py merges into the seed (switch/seed/, packed into sfa-shaderdb.bin).
 //
 // Routes (picked on the menu line with Left/Right): route 1 stops where each warp lands. Routes 2 and 3
 // stop somewhere else in the same map, so a second and third tour compile what route 1 never saw. After
@@ -16,6 +16,10 @@
 // and the tour never moved on. A stop only counts as arrived once the player has stayed loaded for
 // kSettleFrames in a row. A player that vanishes kMaxDrops times means a loop, and that warp is skipped
 // now and in every later tour (listed in kSkipPath).
+//
+// Capture mode (sfaShaderTourStartHere, switch_menu.ini shader_capture= for the Ryujinx save tour,
+// switch/tools/ryujinx-save-tour.py): no warps. It dwells where the loaded save put the player, then hops
+// to up to N far objects in the same map and dwells at each, then reports done so the caller can quit.
 //
 // Runs on the game thread from VIWaitForRetrace (switch_menu.cpp). One "[tour]" line per stop in
 // stdout.log. Built with the game's include dirs (CMakeLists.txt).
@@ -80,6 +84,8 @@ static float sSpots[kRouteCount][2];
 static int sSpotCount;
 // Compile counters: last frame's totals, the totals when the stop began, and the sums for the whole tour.
 static unsigned sLastCompiled, sLastCreated, sStartCompiled, sStartCreated, sTourCompiled, sTourCreated;
+// Capture mode: active, hops still allowed after the current dwell, and set once it has finished.
+static int sHere, sHereHops, sHereDone;
 
 // Where the next tour starts, as "<warp> <route>": the warp after the last finished stop, saved after
 // every stop, so a tour that ends early (crash, power) resumes there from the - menu. The file is
@@ -316,8 +322,16 @@ static int track_player(GameObject* player, int* skipped) {
     return 1;
 }
 
-// Counts a stop as finished, saves the resume point and warps on.
+// Counts a stop as finished, saves the resume point and warps on. In capture mode there is no next
+// warp: the capture ends instead (a vanished player or a failed hop also lands here).
 static void next(void) {
+    if (sHere) {
+        printf("[capture] done: %u shaders and %u pipelines compiled\n", sTourCompiled, sTourCreated);
+        sHere = 0;
+        sHereDone = 1;
+        sState = kIdle;
+        return;
+    }
     ++sStops;
     sfaShaderTourSetResumeWarp(sNext);
     go();
@@ -351,6 +365,35 @@ int sfaShaderTourStart(int first) {
     go();
     return 1;
 }
+
+// Capture mode: dwell at the player's spot, then hop to up to `hops` far objects in this map and dwell
+// at each. 1 started, 0 refused (no player). The warp table, resume point and skip list are not touched.
+int sfaShaderTourStartHere(int hops) {
+    if (sState != kIdle) {
+        return 1;
+    }
+    GameObject* player = Obj_GetPlayerObject();
+    if (player == NULL || gWarpRequested != 0) {
+        return 0;
+    }
+    sHere = 1;
+    sHereDone = 0;
+    sHereHops = hops < 0 ? 0 : hops > kRouteCount - 1 ? kRouteCount - 1 : hops;
+    sCurrent = -1;
+    sTourCompiled = sTourCreated = 0;
+    sSpots[0][0] = player->anim.worldPosX;
+    sSpots[0][1] = player->anim.worldPosZ;
+    sSpotCount = 1;
+    sPresent = kSettleFrames;  // the caller already waited for the player to settle
+    sDrops = 0;
+    printf("[capture] start at (%.0f, %.0f, %.0f), up to %d hops\n", player->anim.worldPosX,
+           player->anim.worldPosY, player->anim.worldPosZ, sHereHops);
+    begin_dwell();
+    return 1;
+}
+
+// 1 once a capture has finished (its caller quits the app).
+int sfaShaderTourHereDone(void) { return sHereDone; }
 
 // Stops after the current stop (the resume point keeps the next one).
 void sfaShaderTourStop(void) {
@@ -462,6 +505,23 @@ void sfaShaderTourFrame(void) {
         const unsigned dc = compiled - sStartCompiled, dp = created - sStartCreated;
         sTourCompiled += dc;
         sTourCreated += dp;
+        if (sHere) {
+            printf("[capture] spot %d: %u shaders, %u pipelines, %.1f s%s\n", sSpotCount, dc, dp, sFrames / 60.0,
+                   done ? "" : " (time limit)");
+            // Hop on while hops are left and a far enough object exists; the hop's area streams in during
+            // kHop (sHopsLeft 0: straight to the dwell once settled).
+            if (sHereHops > 0 && player != NULL) {
+                --sHereHops;
+                if (hop(player)) {
+                    sState = kHop;
+                    sHopsLeft = 0;
+                    sFrames = sQuiet = 0;
+                    return;
+                }
+            }
+            next();
+            return;
+        }
         printf("[tour] route %d, %d/%d warp %d: %u shaders, %u pipelines, %.1f s%s\n", sRoute, sStops + 1,
                sTotal, sCurrent, dc, dp, sFrames / 60.0, done ? "" : " (time limit)");
         next();
