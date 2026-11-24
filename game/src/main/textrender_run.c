@@ -646,6 +646,29 @@ void gameTextInitRendererState(void)
     gGameTextStringStore = (void*)(intptr_t)mmCreateMemoryStore(0x800);
 }
 
+#ifdef __SWITCH__
+/* SFA-NX fix (1.0.1 report: crash entering the Thorntail store). Reloading a slot's text file frees the buffer
+ * that holds its glyph table, entries and strings, but retail kept the slot's pointers and counts. While the new
+ * file loads, gameTextGet returns "<loading>" and the line wrapper scans the freed glyph table for '<'; on the
+ * GameCube that memory still held the old table, on the Switch it can be unmapped (data abort). Called right
+ * after the free: zero counts make every glyph scan end at once. Logged with Extra Logging. */
+extern int sfa_log_extra_on;
+static void gameTextClearFontTables(GameTextRuntime* runtime, int slot, const char* why)
+{
+    TextFont* font = &runtime->fonts[slot];
+
+    if (sfa_log_extra_on)
+    {
+        printf("[text] %s: slot %d status %d glyphs %p x%d entries %p x%d cleared\n", why, slot, font->status,
+               (void*)font->glyphs, font->glyphCount, (void*)font->entries, font->entryCount);
+    }
+    font->glyphs = NULL;
+    font->glyphCount = 0;
+    font->entries = NULL;
+    font->entryCount = 0;
+}
+#endif
+
 void loadGameTextSequence(int sequenceSlotDir, int sequenceId)
 {
     GameTextLoadSlot* slot;
@@ -693,6 +716,10 @@ void loadGameTextSequence(int sequenceSlotDir, int sequenceId)
     } while (i-- != 0);
 
     gameTextBase->fonts[GAMETEXT_SLOT_CUTSCENE].status = 1;
+#ifdef __SWITCH__
+    /* SFA-NX fix: the cutscene slot's tables pointed into the buffer freed above */
+    gameTextClearFontTables(gameTextBase, GAMETEXT_SLOT_CUTSCENE, "sequence reload");
+#endif
     slot = gameTextBase->loadSlots;
     slot = (slot->active == 0)       ? slot
            : ((++slot)->active == 0) ? slot
@@ -776,6 +803,10 @@ void gameTextLoadForCurMap(int sourceId)
     } while (i-- != 0);
 
     runtime->fonts[sourceId].status = 1;
+#ifdef __SWITCH__
+    /* SFA-NX fix: this slot's tables pointed into the buffer freed above */
+    gameTextClearFontTables(runtime, sourceId, "map reload");
+#endif
     *(dirPtr = &runtime->fonts[sourceId].dirId) = (u8)curGameTextDir;
     *(langPtr = &runtime->fonts[sourceId].languageId) = curLanguage;
 
@@ -1208,6 +1239,10 @@ void gameTextFinalizeLoad(GameTextLoadSlot* loadSlot)
     {
         cs->status = 3;
         loadSlot->state = 6;
+#ifdef __SWITCH__
+        /* SFA-NX fix: glyphs points into loadHandle, which the state-6 cleanup frees; drop the tables */
+        gameTextClearFontTables(&gGameTextRuntime, (int)(cs - gGameTextRuntime.fonts), "copy failed");
+#endif
         return;
     }
     n = size >> 1;

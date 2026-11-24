@@ -462,6 +462,14 @@ static inline TextGlyph* findGlyph(u32 ch, int glyphLang) {
     int cnt;
     TextGlyph* g;
 
+#ifdef __SWITCH__
+    /* SFA-NX fix (Thorntail store crash): only a loaded font (status 2) has a valid glyph table. While a text
+     * file reloads the placeholder "<loading>" is drawn without glyphs instead of scanning the old table. */
+    if (gameTextFonts->status != 2)
+    {
+        return NULL;
+    }
+#endif
     g = gameTextFonts->glyphs;
     cnt = gameTextFonts->glyphCount;
     while (cnt-- != 0) {

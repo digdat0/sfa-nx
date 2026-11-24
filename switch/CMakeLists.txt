@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.25)
 # 1.0.0: first SFA-NX release (re-cut with the shader pack outside the NRO and rumble); the updater compares
 # release tags against this.
 # 1.0.1: linkc pressure pad / gates, widescreen minimap clipping and wall-climb sinking fixes.
-project(sfa-nx LANGUAGES C CXX ASM VERSION 1.0.1)
+project(sfa-nx LANGUAGES C CXX ASM VERSION 1.0.2)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
