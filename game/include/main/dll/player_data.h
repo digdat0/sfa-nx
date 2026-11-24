@@ -176,7 +176,7 @@ extern f32 lbl_803DC680;
 extern f32 lbl_803DC684;
 extern int lbl_803DC688[2];
 extern f32 lbl_803DC690[2];
-extern s16 lbl_803DC698;
+extern s16 lbl_803DC698[2]; /* SFA-NX: {base, blend} climb move pair */
 extern s16 lbl_803DC69C[2];
 extern u8 lbl_803DC6A4[4];
 extern f32 lbl_803DC6B8[2];

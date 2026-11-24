@@ -5446,8 +5446,11 @@ f32 lbl_803DC680 = 2.3f;
 f32 lbl_803DC684 = 1.0f;
 int lbl_803DC688[2] = {210, 212};
 f32 lbl_803DC690[2] = {0.030000001f, 0.030000001f};
-s16 lbl_803DC698 = 102;
-s16 lbl_803DC69A = 103;
+/* SFA-NX fix (2026-11-23, Fox sank into the ground starting a wall climb): playerStateClimbOntoWall reads this
+ * as a {base move, blend move} pair through &lbl_803DC698. On GameCube the linker kept 0x803DC69A next to it; GCC
+ * dropped the unused second variable, so tbl[1] read lbl_803DC69C[0] (240, the other climb's move) and the pose
+ * blended toward the wrong animation. One array keeps the pair together. */
+s16 lbl_803DC698[2] = {102, 103};
 s16 lbl_803DC69C[2] = {240, 241};
 s16 gPlayerCurrentMoveId = -1;
 s16 gPlayerPrevMoveId = -1;
@@ -6963,7 +6966,7 @@ int playerStateClimbOntoWall(GameObject* obj, PlayerState* state) {
         if (flag549 != 0) {
             tbl = lbl_803DC69C;
         } else {
-            tbl = &lbl_803DC698;
+            tbl = lbl_803DC698; /* SFA-NX: now an array (see its definition) */
         }
         flags = 0x25;
         if (flag549 != 0) {

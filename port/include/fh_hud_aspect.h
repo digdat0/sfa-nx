@@ -28,6 +28,9 @@ enum {
   FH_HUD_CENTRE,
   FH_HUD_RIGHT,
   FH_HUD_OWN,
+  // Like left, but never treated as a full-width layer: the minimap, whose zoomed-in map texture is wider
+  // than 600 px and is clipped to its box by a scissor (fhHudScissor), so it must shrink with the box.
+  FH_HUD_LEFT_CLIPPED,
 };
 
 // Menu toggle (switch_menu.ini hud_aspect); on by default. Takes effect only in the game's 16:9 mode.

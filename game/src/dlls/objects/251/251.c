@@ -270,7 +270,11 @@ void PressureSwitchFB_update(GameObject* obj) {
                 currentY = obj->anim.localPosY;
                 if (currentY < state->targetPosY) {
                     obj->anim.localPosY = state->velocityY * timeDelta + currentY;
-                    if (obj->anim.localPosY > state->targetPosY) {
+                    /* SFA-NX fix (linkc portcullis report, 2026-11-23): retail tests '>' here. With whole-frame
+                     * steps (timeDelta exactly 1.0, pi_videoinit.c) the 0.125 rises add up to exactly the rest
+                     * height, '>' never trips, and the pad sits at rest with its bit still set forever: the gates
+                     * stay up, the save keeps the bit, and Tricky is never offered the pad. '>=' releases it. */
+                    if (obj->anim.localPosY >= state->targetPosY) {
                         obj->anim.localPosY = state->targetPosY;
                         mainSetBits(pressedGameBit, 0);
                     } else {

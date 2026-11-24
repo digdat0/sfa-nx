@@ -35,7 +35,7 @@ static u8 sTextAnchor[FH_HUD_TEXT_SLOTS];
 static int sTextFilled;
 // Log counters: quads drawn per anchor (index FH_HUD_NONE counts in-scope full-width quads kept
 // stretched), frames counted, and the last active state logged (-1 none yet).
-static unsigned sQuads[5];
+static unsigned sQuads[FH_HUD_LEFT_CLIPPED + 1];
 static unsigned sFrames;
 static int sLoggedActive = -1;
 
@@ -79,6 +79,7 @@ void fhHudPop(void) {
 static f32 fixed_point(int anchor, f32 cx) {
   switch (anchor) {
   case FH_HUD_LEFT:
+  case FH_HUD_LEFT_CLIPPED: // same fixed point as left
     return -1.0f;
   case FH_HUD_RIGHT:
     return 1.0f;
@@ -102,12 +103,14 @@ void fhHudSetProjection(f32 x0, f32 x1) {
   // Full-width layers keep the original mapping, and so do quads entirely off the 640-unit screen: menus park
   // elements there to hide them (the title's START panel waits at x < 0), and the narrower corrected mapping
   // would pull them into view at the screen's edge.
-  if (width >= FH_HUD_FULL_WIDTH || (x0 <= 0.0f && x1 <= 0.0f) || (x0 >= 640.0f && x1 >= 640.0f)) {
+  // (Clipped panels skip this test: their content is cut to a corrected scissor box whatever its width.)
+  if (anchor != FH_HUD_LEFT_CLIPPED &&
+      (width >= FH_HUD_FULL_WIDTH || (x0 <= 0.0f && x1 <= 0.0f) || (x0 >= 640.0f && x1 >= 640.0f))) {
     ++sQuads[FH_HUD_NONE];
     GXSetProjection(hudMatrix, GX_ORTHOGRAPHIC);
     return;
   }
-  ++sQuads[anchor];
+  ++sQuads[anchor == FH_HUD_LEFT_CLIPPED ? FH_HUD_LEFT : anchor]; // clipped counts as left in the log
   // clip x' = A * clip x + (1 - A) * F: 3/4 as wide around the fixed point F; y and z unchanged.
   for (i = 0; i < 4; ++i) {
     for (j = 0; j < 4; ++j) {

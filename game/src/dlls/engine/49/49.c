@@ -8,6 +8,7 @@
 #include "sys/objects.h"
 #include "main/model.h"
 #include "main/objprint_render.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD correction for the minimap box (fhHudScissor, clipped anchor)
 #include "main/gamebits.h"
 #include "dolphin/gx/GXCull.h"
 #include "main/pad.h"
@@ -411,7 +412,15 @@ int Minimap_update(void) {
             gMinimapBoxY = 0x1b8 - gMinimapBoxHeight;
             box->y = gMinimapBoxY;
             drawHudBox(0x32, gMinimapBoxY, gMinimapBoxWidth, gMinimapBoxHeight, gMinimapFadeAlpha & 0xff, 1);
+#ifdef __SWITCH__
+            /* SFA-NX widescreen HUD: the map is clipped to its box. The raw scissor stayed 4/3 too wide while the
+             * box shrank, and a zoomed-in map (wider than 600 px) skipped the correction as a "full-width layer",
+             * so it spilled out of the box. Correct both until the scissor reset below. */
+            fhHudPush(FH_HUD_LEFT_CLIPPED);
+            fhHudScissor(0x32, gMinimapBoxY, gMinimapBoxWidth, gMinimapBoxHeight);
+#else
             GXSetScissor(0x32, gMinimapBoxY, gMinimapBoxWidth, gMinimapBoxHeight);
+#endif
             switch (gMinimapViewMode) {
             case MINIMAP_VIEW_MODE_MAP:
                 if (minimapTexture != NULL) {
@@ -571,6 +580,9 @@ int Minimap_update(void) {
                 }
                 break;
             }
+#ifdef __SWITCH__
+            fhHudPop(); /* SFA-NX: ends the clipped-map scope opened at the box scissor */
+#endif
             GXSetScissor(0, 0, 0x280, 0x1e0);
             drawTexture(gMinimapCompassTexture, 32.0f, (f32)(int)(gMinimapBoxY - 0x14), gMinimapFadeAlpha & 0xff,
                         0x100);
