@@ -11259,6 +11259,9 @@ GameObject* playerFindNearestLookTarget(GameObject* obj) {
         return held;
     }
     best = NULL;
+    /* SFA-NX guard: this loop crashed on a type-8 entry with its low 32 bits zeroed (item pickup); repair the list
+     * first in case the stray write happened earlier in the player's own update */
+    objTypeListCheck("player look target", obj);
     objs = (GameObject**)objGetAllOfType(8, &count);
     i = 0;
     bestDist = 0.0f;

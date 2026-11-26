@@ -1171,6 +1171,9 @@ void Obj_UpdateObject(GameObject* obj) {
     if (obj->objectFlags & OBJECT_FLAG_FREED) {
         return;
     }
+    /* SFA-NX guard: repair stray writes into the object type list before this object reads it; the log then names
+     * the previous object as the writer (item-pickup crash in playerFindNearestLookTarget) */
+    objTypeListCheck("object update", obj);
     if (gObjUpdateFlags & 1) {
         switch (object->romDefNo) {
         case OBJECT_SEQID_SABRE:
@@ -2153,10 +2156,15 @@ void Obj_UpdateAllObjects(u8 flags) {
         Obj_UpdateObject(((GameObject*)obj2)->childObjs[0]);
     }
     if (timeStop == 0) {
+        /* SFA-NX guard: bracket hit processing (its contact scratch sits right before the type list in memory) */
+        objTypeListCheck("before ObjHits_Update", NULL);
         ObjHits_Update(gObjCount);
+        objTypeListCheck("after ObjHits_Update", NULL);
         obj3 = gObjUpdateList.head;
         for (; obj3 != 0; obj3 = *(uintptr_t*)(obj3 + off)) {
             if ((((GameObject*)obj3)->objectFlags & OBJECT_OBJFLAG_HITDETECT_DISABLED) == 0) {
+                /* SFA-NX guard: per-object window for the type list check (hit callbacks free picked-up items) */
+                objTypeListCheck("hit detect", (GameObject*)obj3);
                 switch (((GameObject*)obj3)->anim.romDefNo) {
                 case 0:
                 case 0x1f:
@@ -2212,11 +2220,15 @@ void Obj_UpdateAllObjects(u8 flags) {
         (*gExpgfxInterface)->updateFrameState(0, framesThisStep);
     }
     if (timeStop == 0) {
+        /* SFA-NX guard: close the window after the last hit callback, water and effects */
+        objTypeListCheck("before triggers", NULL);
         ObjHits_TickPriorityHitCooldowns();
         (*gObjectTriggerInterface)->run();
         (*gObjectTriggerInterface)->updateCamera();
         (*gCameraInterface)->update(framesThisStep);
     }
+    /* SFA-NX guard: end of the object pass */
+    objTypeListCheck("end of object updates", NULL);
 }
 
 void Obj_InitObjectSystem(void) {

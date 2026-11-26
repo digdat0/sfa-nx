@@ -1,6 +1,7 @@
 #include "window.hpp"
 
 #ifdef AURORA_ENABLE_GX
+#include "gx/fifo.hpp"
 #include "imgui.hpp"
 #include "webgpu/gpu.hpp"
 #endif
@@ -131,6 +132,13 @@ void resize_swapchain() noexcept {
     SDL_SetRenderScale(g_renderer, size.scale, size.scale);
   }
 #ifdef AURORA_ENABLE_GX
+  // SFA-NX fix (crash changing Docked Resolution 1080p -> 900p: "[dk] FATAL: Invalid native render target").
+  // With frame overlap the previous frame's submit_frame runs on the FIFO thread and reads g_frameBuffer,
+  // the deko present texture and the resample target, which the resize below replaces. resize_swapchain's
+  // gpu_synchronize waits only for the render worker, so the FIFO thread could copy a texture handle as
+  // its last reference was dropped (no deko3d shadow left, the pass aborts). Finish that frame first, as
+  // shutdown() does. Docking and undocking take this path too.
+  gx::fifo::drain();
   webgpu::resize_swapchain(size.fb_width, size.fb_height, size.native_fb_width, size.native_fb_height);
 #endif
 }

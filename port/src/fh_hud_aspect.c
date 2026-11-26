@@ -189,3 +189,62 @@ int fhHudTextAnchor(int index) {
   }
   return sTextAnchor[index];
 }
+
+// Viewport saved by fhHudWorldInsetBegin for fhHudWorldInsetEnd; sInsetActive when it must be restored.
+static f32 sInsetViewport[6];
+static int sInsetActive;
+// Last effective camera aspect logged by fhHudWorldInsetBegin (0 none yet), so it is logged once per change.
+static f32 sInsetLoggedAspect;
+
+// A 3D model drawn into a HUD box from the main scene (the world map's comms portrait, object 467): the box
+// moves with the centre-anchored HUD, but the model is projected by the scene camera and stays where the 4:3
+// layout put it (hardware, build 1834: with the camera already 16:9 the head sat at the box's old centre).
+// So move the viewport by the box centre's shift (like the in-flight comms head, dlls/engine/0 headDisplayDraw),
+// and scale it around the box centre by k = 0.75 * A / (4/3) with the camera aspect A, which is 1 for a 16:9
+// camera and squeezes a 4:3 camera's (stretched) model to the corrected width.
+void fhHudWorldInsetBegin(u32 x, u32 y, u32 w, u32 h) {
+  f32 proj[7];
+  f32 aspect;
+  f32 k = 1.0f;
+  f32 cx;
+  f32 shift;
+  sInsetActive = 0;
+  if (!fhHudAspectActive()) {
+    GXSetScissor(x, y, w, h);
+    return;
+  }
+  // The scissor box and its centre follow the centre-anchored frame around it.
+  cx = (f32)x + 0.5f * (f32)w;
+  fhHudPush(FH_HUD_CENTRE);
+  fhHudScissor(x, y, w, h);
+  shift = fhHudMapX(cx) - cx;
+  fhHudPop();
+  // Effective aspect from the loaded perspective projection: m00 = m11 / A (proj = type, m00, m02, m11, ...).
+  GXGetProjectionv(proj);
+  aspect = 0.0f;
+  if (proj[0] == (f32)GX_PERSPECTIVE && proj[1] > 0.0f && proj[3] > 0.0f) {
+    aspect = proj[3] / proj[1];
+    k = FH_HUD_SCALE * aspect * 0.75f; // 0.75 * A / (4/3)
+    if (k > 0.98f && k < 1.02f) {
+      k = 1.0f; // a 16:9 camera: move only
+    }
+  }
+  if (aspect < sInsetLoggedAspect - 0.01f || aspect > sInsetLoggedAspect + 0.01f || sInsetLoggedAspect == 0.0f) {
+    printf("[hud] world inset: camera aspect %.3f, viewport scale %.3f, shift %.1f\n", aspect, k, shift);
+    sInsetLoggedAspect = aspect != 0.0f ? aspect : -1.0f;
+  }
+  GXGetViewportv(sInsetViewport);
+  // Scale around the box centre by k, then move the box centre by shift.
+  GXSetViewport(cx + shift + (sInsetViewport[0] - cx) * k, sInsetViewport[1], sInsetViewport[2] * k,
+                sInsetViewport[3], sInsetViewport[4], sInsetViewport[5]);
+  sInsetActive = 1;
+}
+
+// Restores the viewport fhHudWorldInsetBegin moved (the caller restores the scissor itself).
+void fhHudWorldInsetEnd(void) {
+  if (sInsetActive) {
+    GXSetViewport(sInsetViewport[0], sInsetViewport[1], sInsetViewport[2], sInsetViewport[3], sInsetViewport[4],
+                  sInsetViewport[5]);
+    sInsetActive = 0;
+  }
+}

@@ -20,5 +20,7 @@ void objFreeObjectType(struct GameObject* obj, int group);
 int objGetObjectType(struct GameObject* obj);
 void objAddObjectType(struct GameObject* obj, int group);
 void objTypeInit(void);
+/* SFA-NX guard: check the type list against its shadow copy, repair and log stray writes (objlib.c) */
+void objTypeListCheck(const char* phase, struct GameObject* obj);
 
 #endif /* MAIN_OBJTYPE_H_ */

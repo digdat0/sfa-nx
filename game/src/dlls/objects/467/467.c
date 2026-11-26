@@ -5,6 +5,7 @@
 #include "dlls/objects/467.h"
 
 #include "dolphin/math.h"
+#include "fh_hud_aspect.h" // SFA-NX: widescreen HUD correction for the comms portrait (fhHudWorldInset*)
 #include "main/audio/stream.h"
 #include "main/camera.h"
 #include "main/dll/dll_0000_gameui.h"
@@ -179,8 +180,11 @@ void worldobj_render(GameObject* obj, int renderArg2, int renderArg3, int render
         break;
     case WORLDOBJ_PEPPER_OBJ:
         if (randomGetRange(0, 0x19) != 0 && state->effectState != 0) {
-            GXSetScissor(0x1e0, 0x32, 0x82, 0x96);
+            // SFA-NX: the portrait's box moves with the centre-anchored HUD in 16:9; its scissor and the
+            // model's viewport follow it (port/src/fh_hud_aspect.c). Plain GXSetScissor when not corrected.
+            fhHudWorldInsetBegin(0x1e0, 0x32, 0x82, 0x96);
             objRenderModelAndHitVolumes(obj, renderArg2, renderArg3, renderArg4, renderArg5, 1.0f);
+            fhHudWorldInsetEnd(); // SFA-NX: restores the viewport moved above
             Camera_ApplyCurrentViewport((void*)renderArg2);
         }
         break;

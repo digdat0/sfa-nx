@@ -343,6 +343,71 @@ void fhDumpNearbyObjects(void) {
     }
 }
 
+/* SFA-NX guard: shadow copy of the object type list.
+ * Two hardware crashes (picking up an item, map 19) died in playerFindNearestLookTarget on a type-8 entry that read
+ * 0x600000000 / 0x500000000: a live 64-bit object pointer whose low 32 bits had been overwritten with zero by a stray
+ * 32-bit store from elsewhere. The list is only changed by objAddObjectType / objFreeObjectType / objTypeInit, which
+ * also update this shadow. objTypeListCheck compares the two at known points of the frame (before every object
+ * update, around hit processing, ...), repairs any slot that changed behind our back and logs where it happened, so
+ * the game keeps running and the next log names the code that wrote into the list. */
+static uintptr_t sObjTypeListShadow[OBJTYPE_LIST_MAX];
+static u8 sObjTypeIndexShadow[OBJTYPE_INDEX_COUNT];
+static u8 sObjTypeCountShadow;
+/* last point where the list was known good (for the log line) */
+static const char* sObjTypeCheckLastPhase = "init";
+static s16 sObjTypeCheckLastDef = -1;
+/* corrupted slots seen so far; the log stops after a few reports so a repeating writer cannot flood the SD card */
+static int sObjTypeCheckRepairs;
+
+/* Copy the live list into the shadow after every legitimate change. */
+static void objTypeShadowSync(void) {
+    memcpy(sObjTypeListShadow, gObjectTypeList, sizeof(gObjectTypeList));
+    memcpy(sObjTypeIndexShadow, gObjectTypeIndices.offsets, sizeof(sObjTypeIndexShadow));
+    sObjTypeCountShadow = gObjectTypeListCount;
+}
+
+/* Compare the live list with the shadow, restore what differs, and log the window in which it changed.
+ * phase names the point of the frame, obj (may be NULL) the object about to run. */
+void objTypeListCheck(const char* phase, GameObject* obj) {
+    int i;
+    int n;
+    int bad = 0;
+
+    n = sObjTypeCountShadow;
+    /* entries in use, then the per-group offsets and the count itself */
+    for (i = 0; i < n; i++) {
+        if (gObjectTypeList[i] != sObjTypeListShadow[i]) {
+            if (sObjTypeCheckRepairs < 32) {
+                printf("[objtype] slot %d corrupted: 0x%llx (expected 0x%llx) between '%s' (def %d) and '%s' (def %d); "
+                       "repaired\n",
+                       i, (unsigned long long)gObjectTypeList[i], (unsigned long long)sObjTypeListShadow[i],
+                       sObjTypeCheckLastPhase, sObjTypeCheckLastDef, phase, obj != NULL ? obj->anim.romDefNo : -1);
+            }
+            gObjectTypeList[i] = sObjTypeListShadow[i];
+            sObjTypeCheckRepairs++;
+            bad = 1;
+        }
+    }
+    if (memcmp(gObjectTypeIndices.offsets, sObjTypeIndexShadow, sizeof(sObjTypeIndexShadow)) != 0 ||
+        gObjectTypeListCount != sObjTypeCountShadow) {
+        if (sObjTypeCheckRepairs < 32) {
+            printf("[objtype] group offsets/count corrupted (count %d, expected %d) between '%s' (def %d) and '%s' "
+                   "(def %d); repaired\n",
+                   gObjectTypeListCount, sObjTypeCountShadow, sObjTypeCheckLastPhase, sObjTypeCheckLastDef, phase,
+                   obj != NULL ? obj->anim.romDefNo : -1);
+        }
+        memcpy(gObjectTypeIndices.offsets, sObjTypeIndexShadow, sizeof(sObjTypeIndexShadow));
+        gObjectTypeListCount = sObjTypeCountShadow;
+        sObjTypeCheckRepairs++;
+        bad = 1;
+    }
+    if (bad) {
+        fflush(stdout);
+    }
+    sObjTypeCheckLastPhase = phase;
+    sObjTypeCheckLastDef = obj != NULL ? obj->anim.romDefNo : -1;
+}
+
 void objFreeObjectType(GameObject* obj, int group) {
     uintptr_t h = (uintptr_t)obj;
     u8* offset;
@@ -380,6 +445,8 @@ void objFreeObjectType(GameObject* obj, int group) {
         offset++;
         group++;
     }
+    /* SFA-NX guard: legitimate change, keep the shadow in step (see objTypeListCheck) */
+    objTypeShadowSync();
 }
 
 int objGetObjectType(GameObject* obj) {
@@ -414,7 +481,9 @@ void objAddObjectType(GameObject* obj, int group) {
     if ((group < 0) || (group >= OBJTYPE_COUNT)) {
         return;
     }
-    if ((int)(u32)gObjectTypeListCount >= OBJTYPE_LIST_MAX) {
+    /* SFA-NX guard: the count is a u8, so it can never reach OBJTYPE_LIST_MAX (0x100) and the original check never
+     * fired; the 256th add would wrap the count to 0 and break every group. Stop at 255 entries instead. */
+    if ((int)(u32)gObjectTypeListCount >= OBJTYPE_LIST_MAX - 1) {
         OSReport(sObjAddObjectTypeReachedMaxTypes);
         return;
     }
@@ -446,11 +515,15 @@ void objAddObjectType(GameObject* obj, int group) {
         offset++;
         group++;
     }
+    /* SFA-NX guard: legitimate change, keep the shadow in step (see objTypeListCheck) */
+    objTypeShadowSync();
 }
 
 void objTypeInit(void) {
     memset(gObjectTypeIndices.offsets, 0, sizeof(gObjectTypeIndices.offsets));
     gObjectTypeListCount = 0;
+    /* SFA-NX guard: empty list, empty shadow */
+    objTypeShadowSync();
     return;
 }
 

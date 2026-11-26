@@ -52,6 +52,13 @@ f32 fhHudMapX(f32 x);
 // GXSetScissor with its x range moved by fhHudMapX
 void fhHudScissor(u32 x, u32 y, u32 w, u32 h);
 
+// A scene-camera model drawn inside a centre-anchored HUD box (world map comms portrait): Begin sets the
+// box's scissor (moved like the box) and moves (and for a 4:3 camera squeezes) the viewport so the model
+// lands in the moved box; End
+// restores the viewport. Without the correction active, Begin is plain GXSetScissor and End does nothing.
+void fhHudWorldInsetBegin(u32 x, u32 y, u32 w, u32 h);
+void fhHudWorldInsetEnd(void);
+
 // Once per frame, at the UI draw pass: counts frames for the periodic [hud] log line
 void fhHudFrameTick(void);
 

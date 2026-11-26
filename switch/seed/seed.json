@@ -6,36 +6,36 @@
     "modules": 0,
     "binding_records": 1607,
     "bytes": 5824590,
-    "sha256": "e5dc2b6dbbf9bed347169884539236c4781e05bda1ca3db7d7fafe3eecb97b00",
+    "sha256": "c52b12ccdd66f13420ad35de4b808a97cfdf2dace72e18e010c31a716329c2cd",
     "inputs": [
       {
         "path": "switch/seed/initial_dksh_cache.bin",
-        "bytes": 4717881,
+        "bytes": 5824590,
         "bad_crc": 0,
         "torn_bytes": 0,
-        "mtime": 1795392467.0163906
+        "mtime": 1795392791.5100684
       },
       {
         "path": "cache/deko/dksh_local.bin",
-        "bytes": 1106725,
+        "bytes": 222500,
         "bad_crc": 0,
         "torn_bytes": 0,
-        "mtime": 1795392735.194134
+        "mtime": 1795394182.0
       }
     ]
   },
   "pipelines": {
     "schema": 1,
-    "recipes": 9528,
-    "bytes": 39415808,
+    "recipes": 9698,
+    "bytes": 40124416,
     "inputs": [
       {
         "path": "switch/seed/initial_pipeline_cache.db",
         "recipes": 9528
       },
       {
-        "path": "SFA-NX/cache/pipeline_cache_deko.db",
-        "recipes": 9528
+        "path": "roms/cache/pipeline_cache_deko.db",
+        "recipes": 663
       }
     ]
   }

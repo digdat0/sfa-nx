@@ -35,6 +35,7 @@
 #include "sys/objects.h"
 #include "main/newclouds.h"
 #include "main/objseq.h"
+#include "main/objtype.h" /* SFA-NX guard: objTypeListCheck */
 #include "main/player_control_interface.h"
 #include "main/resource.h"
 #include "main/screen_transition.h"
@@ -634,6 +635,8 @@ static void gameUpdate(void)
     uiDll_runFrameStartAndLoadNext();
     camcontrol_setAButtonIconForTarget();
     getButtonsJustPressed(0);
+    /* SFA-NX guard: catch type-list writes from the UI, text, camera and render steps of the previous frame */
+    objTypeListCheck("frame start", NULL);
     Obj_UpdateAllObjects(timeStop);
     if (hudHiddenFrameCount == 0)
     {
@@ -666,10 +669,15 @@ static void gameUpdate(void)
     uiDll_runFrameEndAndLoadNext();
     trackIntersect();
     mapUpdateCameraPosByTransformSpace();
+    /* SFA-NX guard: window for environment, water and UI-frame-end steps */
+    objTypeListCheck("before map loads", NULL);
     doPendingMapLoads();
+    objTypeListCheck("after map loads", NULL);
     Obj_ApplyPendingParentLinks();
     (*gCheckpointInterface)->onGameLoop();
     resetSomeGxFlags();
+    /* SFA-NX guard: window for parent links and checkpoints; the render steps are covered by the next frame start */
+    objTypeListCheck("before render", NULL);
     if (screenBlankFrameCount == 0)
     {
         sceneRender(0, 0, 0, 0, 0, 0);
