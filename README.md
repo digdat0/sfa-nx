@@ -157,13 +157,15 @@ SFA-NX is built on the work of these projects and people:
 
 ## License
 
-SFA-NX is free software under the [GNU General Public License v3.0](LICENSE): you may use, change and share it,
-but if you distribute a modified version you must publish its source under the same license and keep the
-copyright notices, including credit to SFA-NX (digdat0).
+SFA-NX carries Foxhollow's license: Foxhollow, the SFA decompilation and the SFA-NX changes are
+[CC0 1.0](LICENSE), dedicated to the public domain.
 
-Parts of the repository come from other projects and keep their own licenses, all compatible with the GPL:
-Foxhollow and the SFA decompilation are CC0 1.0 ([LICENSE-FOXHOLLOW](LICENSE-FOXHOLLOW)), Aurora is MIT
-([extern/aurora/LICENSE](extern/aurora/LICENSE)), and the deko3d renderer code is MIT and MPL-2.0
-([switch/deko/THIRD_PARTY.md](switch/deko/THIRD_PARTY.md)).
+Some files keep other licenses:
+- **GPL-3.0-or-later:** parts of the Switch layer come from [Melee-NX](https://github.com/KawaiiBunga/Melee-NX)
+  and keep its license ([LICENSE-GPL-3.0](LICENSE-GPL-3.0)). [switch/GPL-FILES.md](switch/GPL-FILES.md) lists
+  them. Because the Switch build includes them, the released `SFA-NX.nro` as a whole is distributed under the
+  GPL-3.0: if you share a modified build, share its source too.
+- **MIT:** Aurora ([extern/aurora/LICENSE](extern/aurora/LICENSE)).
+- **MIT and MPL-2.0:** the deko3d renderer code ([switch/deko/THIRD_PARTY.md](switch/deko/THIRD_PARTY.md)).
 
 Star Fox Adventures is © Nintendo and Rare. This project is not affiliated with or endorsed by Nintendo.

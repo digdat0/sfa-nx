@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: CC0-1.0 */
 /* RVZ reader: turns Dolphin's compressed disc format back into plain GameCube disc bytes on demand.
  *
  * File layout (all integers big-endian), as written by Dolphin's WIA/RVZ writer:

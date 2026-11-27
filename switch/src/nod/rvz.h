@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: CC0-1.0 */
 /* RVZ disc images (Dolphin's compressed format) for the Switch disc reader.
  * Why: on desktop Aurora reads RVZ through the Rust nod library, which cannot be built for the Switch.
  * gc_disc.c wraps the raw file stream with rvz_wrap() when the file starts with "RVZ\x01", so everything
